@@ -8,6 +8,10 @@ enum Route {
     Home {},
     #[route("/blog/:id")]
     Blog { id: i32 },
+    #[route("/payees")]
+    Payees {},
+    #[route("/transactions")]
+    Transactions {},
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
@@ -55,6 +59,86 @@ fn Home() -> Element {
     }
 }
 
+/// Payees Page
+#[component]
+fn Payees() -> Element {
+    rsx! {
+        PayeesList {  }
+    }
+}
+
+/// Payees List
+#[component]
+fn PayeesList() -> Element {
+    rsx! {
+        table {
+            tr {
+                th { "ID" }
+                th { "Name" }
+                th { "Transfer Account ID" }
+                th { "Deleted" }
+            }
+            Payee {}
+        }
+
+    }
+}
+/// Payee
+#[component]
+fn Payee() -> Element {
+    rsx! {
+        tr {
+            td {"data-fieldname": "id", "12e6994f-db47-4141-8b02-a26fe367cee6"},
+            td {"data-fieldname": "name", "ACME"},
+            td {"data-fieldname": "transfer_acct_id", "null"},
+            td {"data-fieldname": "deleted", "false"},
+        }
+    }
+}
+
+/// Transaction Page
+#[component]
+fn Transactions() -> Element {
+    rsx! {
+        TransactionList {  }
+    }
+}
+
+/// Transaction List
+#[component]
+fn TransactionList() -> Element {
+    rsx! {
+        table {
+            tr {
+                th { "Date" }
+                th { "Amount" }
+                th { "Memo" }
+                th { "Cleared" }
+                th { "Approved" }
+                th { "Payee Name" }
+                th { "Category" }
+            }
+            Transaction {}
+        }
+
+    }
+}
+/// Transaction
+#[component]
+fn Transaction() -> Element {
+    rsx! {
+        tr {
+            td {"data-fieldname": "date", "2026-01-01"},
+            td {"data-fieldname": "amount", "-100.00"},
+            td {"data-fieldname": "memo", "A test transaction"},
+            td {"data-fieldname": "cleared", "reconciled"},
+            td {"data-fieldname": "approved", "true"},
+            td {"data-fieldname": "payee_name", "ACME"},
+            td {"data-fieldname": "category_name", "Monthly"}
+        }
+    }
+}
+
 /// Blog page
 #[component]
 pub fn Blog(id: i32) -> Element {
@@ -93,6 +177,14 @@ fn Navbar() -> Element {
             Link {
                 to: Route::Blog { id: 1 },
                 "Blog"
+            }
+            Link {
+                to: Route::Payees {},
+                "Payees"
+            }
+            Link {
+                to: Route::Transactions {},
+                "Transactions"
             }
         }
 
