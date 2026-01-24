@@ -36,7 +36,8 @@ static PAT: GlobalSignal<Option<&str>> = GlobalSignal::new(|| None);
 /// Local in-memory cache of payees pulled from the API; don't update this too often
 static PAYEES_CACHE: GlobalSignal<Vec<Payee>> = GlobalSignal::new(|| Vec::new());
 /// The budget ID to use when talking to the API
-static BUDGET: GlobalSignal<&str> = GlobalSignal::new(|| "e71410e0-306f-42bb-8e79-ac905a392a9a");
+// static BUDGET: GlobalSignal<&str> = GlobalSignal::new(|| "e71410e0-306f-42bb-8e79-ac905a392a9a");
+static BUDGET: GlobalSignal<&str> = GlobalSignal::new(|| "594b4cb4-028e-41a9-a908-d00ee0647611");
 
 fn main() {
     dioxus::launch(App);
@@ -78,7 +79,7 @@ async fn create_database() -> Result<Database, idb::Error> {
     open_request.await
 }
 
-async fn add_payees(database: &Database, payees: &Vec<Payee>) -> anyhow::Result<Vec<JsValue>> {
+async fn replace_payees(database: &Database, payees: &Vec<Payee>) -> anyhow::Result<Vec<JsValue>> {
     debug!("adding {} payees", &payees.len());
     let transaction = database
         .transaction(&["payees"], idb::TransactionMode::ReadWrite)
@@ -86,7 +87,13 @@ async fn add_payees(database: &Database, payees: &Vec<Payee>) -> anyhow::Result<
 
     let store = transaction
         .object_store("payees")
-        .map_err(|e| anyhow::anyhow!("unable to get objectstore: {:#?}", e))?;
+        .map_err(|e| anyhow::anyhow!("unable to get object store: {:#?}", e))?;
+
+    store
+        .clear()
+        .map_err(|e| anyhow::anyhow!("unable to clear the store: {:#?}", e))?
+        .await
+        .map_err(|e| anyhow::anyhow!("unable to clear the store: {:#?}", e))?;
 
     let mut ids = Vec::new();
     for payee in payees.iter() {
@@ -105,9 +112,6 @@ async fn add_payees(database: &Database, payees: &Vec<Payee>) -> anyhow::Result<
         trace!("add payee: {:#?}", &payee);
         ids.push(id);
     }
-    // let payee = serde_json::json!({
-    //     "name": "BP"
-    // });
 
     transaction
         .commit()
@@ -120,18 +124,41 @@ async fn add_payees(database: &Database, payees: &Vec<Payee>) -> anyhow::Result<
     Ok(ids)
 }
 
+async fn get_payees(databse: &Database) -> anyhow::Result<Vec<Payee>> {
+    let transaction = databse
+        .transaction(&["payees"], idb::TransactionMode::ReadOnly)
+        .map_err(|e| anyhow::anyhow!("unable to start tranaction: {:#?}", e))?;
+
+    let store = transaction
+        .object_store("payees")
+        .map_err(|e| anyhow::anyhow!("unable to get object store: {:#?}", e))?;
+
+    let stored_payees = store
+        .get_all(None, None)
+        .map_err(|e| anyhow::anyhow!("unable to get stored payees: {:#?}", e))?
+        .await
+        .map_err(|e| anyhow::anyhow!("unable to get stored payees: {:#?}", e))?;
+
+    let stored_payees = stored_payees
+        .into_iter()
+        .map(|p| {
+            serde_wasm_bindgen::from_value(p.clone())
+                .map_err(|e| anyhow::anyhow!("unable to map payee: {:#?}", e))
+        })
+        .collect::<anyhow::Result<Vec<Payee>>>()
+        .map_err(|e| anyhow::anyhow!("unable to get stored payees: {:#?}", e))?;
+
+    transaction
+        .await
+        .map_err(|e| anyhow::anyhow!("unable to await transaction: {:#?}", e))?;
+
+    Ok(stored_payees)
+}
+
 #[component]
 fn App() -> Element {
     let env_pat = env!("YNAB_PAT"); // TODO this bakes it into the binary, security risk
     *PAT.write() = Some(env_pat);
-
-    // use_future(move || async move {
-    //     let database = create_database().await?;
-    //     *DATABASE.write() = Some(database);
-    //
-    //     //Allows for ? syntax sugar
-    //     Ok::<(), Box<dyn std::error::Error>>(())
-    // });
 
     let db_resource = use_resource(move || async move {
         let db = create_database().await.expect("unable to open database");
@@ -168,6 +195,19 @@ fn Home() -> Element {
 /// Payees Page
 #[component]
 fn Payees() -> Element {
+    use_resource(move || async move {
+        let db = use_context::<Arc<Database>>();
+        match get_payees(&db).await {
+            Ok(payees) => {
+                *PAYEES_CACHE.write() = payees;
+                debug!("set PAYEES_CACHE from indexdb");
+            }
+            Err(e) => {
+                error!("unable to get payees from indexdb: {:#?}", e);
+            }
+        }
+    });
+
     let get_payees = move |_| async move {
         let db = use_context::<Arc<Database>>();
         let httpclient = reqwest::Client::new();
@@ -188,11 +228,14 @@ fn Payees() -> Element {
         *PAYEES_CACHE.write() = ynabresponse.data.payees;
         debug!("got payees from ynab api and stored in local cache");
         debug!("adding payees to indexdb");
-        add_payees(&db, &*PAYEES_CACHE.read()).await;
+        replace_payees(&db, &*PAYEES_CACHE.read()).await;
         debug!("added payees to indexdb")
     };
 
     rsx! {
+        div {
+            button { onclick: get_payees, id: "get_payees", "Get Payees" }
+        }
         table {
             tr {
                 th { "ID" }
@@ -208,9 +251,6 @@ fn Payees() -> Element {
                     td {"data-fieldname": "deleted", "{payee.deleted}"},
                 }
             }
-        }
-        div {
-            button { onclick: get_payees, id: "get_payees", "Get Payees" }
         }
     }
 }
