@@ -1,6 +1,13 @@
-use dioxus::prelude::*;
+use std::sync::Arc;
+
+use dioxus::{prelude::*, stores::index};
+use idb::{Database, DatabaseEvent, Factory, IndexParams, KeyPath, ObjectStoreParams};
 use reqwest::header::HeaderMap;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_wasm_bindgen::Serializer;
+use wasm_bindgen::JsValue;
+
+use anyhow::Context;
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -22,6 +29,8 @@ const MAIN_CSS: Asset = asset!("/assets/main.css");
 const HEADER_SVG: Asset = asset!("/assets/header.svg");
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 
+const DATABASE_NAME: &str = "ynab-payee-manager";
+
 /// Personal Access Token for YNAB account
 static PAT: GlobalSignal<Option<&str>> = GlobalSignal::new(|| None);
 /// Local in-memory cache of payees pulled from the API; don't update this too often
@@ -33,14 +42,120 @@ fn main() {
     dioxus::launch(App);
 }
 
+async fn create_database() -> Result<Database, idb::Error> {
+    let factory = Factory::new()?;
+    let mut open_request = factory
+        .open(DATABASE_NAME, Some(2))
+        .expect("unable to open database");
+
+    // Add an upgrade handler for the database
+    open_request.on_upgrade_needed(|event| {
+        // Get database instance from event
+        let database = event.database().expect("unable to get database from event");
+
+        database.delete_object_store("payees");
+
+        // Prepare object store parameters
+        let mut store_parameters = ObjectStoreParams::new();
+        store_parameters.auto_increment(true);
+        store_parameters.key_path(Some(KeyPath::new_single("id")));
+
+        // Create 'payees' object store
+        let payees_store = database
+            .create_object_store("payees", store_parameters)
+            .expect("unable to create object store");
+
+        // Prepare index parameters
+        // let mut index_parameters = IndexParams::new();
+        // index_parameters.unique(true);
+
+        // Create an index for 'name' on the payees_store
+        // payees_store
+        //     .create_index("name", KeyPath::new_single("name"), Some(index_parameters))
+        //     .expect("unable to create index");
+    });
+
+    open_request.await
+}
+
+async fn add_payees(database: &Database, payees: &Vec<Payee>) -> anyhow::Result<Vec<JsValue>> {
+    debug!("adding {} payees", &payees.len());
+    let transaction = database
+        .transaction(&["payees"], idb::TransactionMode::ReadWrite)
+        .map_err(|e| anyhow::anyhow!("unable to start transaction: {:#?}", e))?;
+
+    let store = transaction
+        .object_store("payees")
+        .map_err(|e| anyhow::anyhow!("unable to get objectstore: {:#?}", e))?;
+
+    let mut ids = Vec::new();
+    for payee in payees.iter() {
+        trace!("adding payee: {:#?}", &payee);
+        let id = store
+            .add(
+                &payee
+                    .serialize(&Serializer::json_compatible())
+                    .map_err(|e| anyhow::anyhow!("unable to serialize payee: {:#?}", e))?,
+                None,
+            )
+            .map_err(|e| anyhow::anyhow!("unable to store payee: {:#?}", e))?
+            .await
+            .map_err(|e| anyhow::anyhow!("unable to store payee: {:#?}", e))?;
+
+        trace!("add payee: {:#?}", &payee);
+        ids.push(id);
+    }
+    // let payee = serde_json::json!({
+    //     "name": "BP"
+    // });
+
+    transaction
+        .commit()
+        .map_err(|e| anyhow::anyhow!("unable to commit transaction: {:#?}", e))?
+        .await
+        .map_err(|e| anyhow::anyhow!("unable to commit transaction: {:#?}", e))?;
+
+    debug!("added {} payees", &ids.len());
+
+    Ok(ids)
+}
+
 #[component]
 fn App() -> Element {
     let env_pat = env!("YNAB_PAT"); // TODO this bakes it into the binary, security risk
     *PAT.write() = Some(env_pat);
-    rsx! {
-        document::Link { rel: "icon", href: FAVICON }
-        document::Link { rel: "stylesheet", href: MAIN_CSS } document::Link { rel: "stylesheet", href: TAILWIND_CSS }
-        Router::<Route> {}
+
+    // use_future(move || async move {
+    //     let database = create_database().await?;
+    //     *DATABASE.write() = Some(database);
+    //
+    //     //Allows for ? syntax sugar
+    //     Ok::<(), Box<dyn std::error::Error>>(())
+    // });
+
+    let db_resource = use_resource(move || async move {
+        let db = create_database().await.expect("unable to open database");
+        Arc::new(db)
+    });
+
+    let db_handle = db_resource.read().as_ref().cloned();
+
+    match db_handle {
+        Some(db) => {
+            use_context_provider(|| db.clone());
+            debug!("added database handle to context");
+
+            rsx! {
+                document::Link { rel: "icon", href: FAVICON }
+                document::Link { rel: "stylesheet", href: MAIN_CSS } document::Link { rel: "stylesheet", href: TAILWIND_CSS }
+                Router::<Route> {}
+            }
+        }
+        None => {
+            rsx! {
+                "Initializing database..."
+            }
+        }
     }
 }
 
@@ -54,6 +169,7 @@ fn Home() -> Element {
 #[component]
 fn Payees() -> Element {
     let get_payees = move |_| async move {
+        let db = use_context::<Arc<Database>>();
         let httpclient = reqwest::Client::new();
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -70,6 +186,10 @@ fn Payees() -> Element {
         let ynabresponse: YnabResponse = response.json().await.unwrap();
         // debug!("{:#?}", ynabresponse);
         *PAYEES_CACHE.write() = ynabresponse.data.payees;
+        debug!("got payees from ynab api and stored in local cache");
+        debug!("adding payees to indexdb");
+        add_payees(&db, &*PAYEES_CACHE.read()).await;
+        debug!("added payees to indexdb")
     };
 
     rsx! {
@@ -186,6 +306,12 @@ fn Navbar() -> Element {
                 "Transactions"
             }
         }
+        // NOTE: Header component reference can go here
+        p {
+            "Warning: This app will directly affect your YNAB budget. "
+            "It will not make a backup for you. "
+            "Please make a backup yourself before using this."
+        }
 
         Outlet::<Route> {}
     }
@@ -201,7 +327,7 @@ struct ResponseData {
     server_knowledge: i32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Payee {
     id: String,
     name: String,
