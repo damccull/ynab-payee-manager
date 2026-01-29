@@ -129,17 +129,17 @@
             pkg-config
             rustPlatform.bindgenHook
             (wasm-bindgen-cli.overrideAttrs (oldAttrs: rec {
-              version = "0.2.107";
+              version = "0.2.108";
               src = fetchCrate {
                 pname = "wasm-bindgen-cli";
                 version = version;
-                hash = "sha256-bhZAstoWYTiQHwb0/Qxudk5WTyU8AY8taTILtUcC8tw=";
+                hash = "sha256-UsuxILm1G6PkmVw0I/JF12CRltAfCJQFOaT4hFwvR8E=";
               };
 
               cargoDeps = rustPlatform.fetchCargoVendor {
                 inherit src;
                 inherit (src) pname version;
-                hash = "sha256-2e0/IRWhbTNgrYGYxIfXvIQnEq1QVaUqVL0wO8ZWdBA=";
+                hash = "sha256-iqQiWbsKlLBiJFeqIYiXo3cqxGLSjNM8SOWXGM9u43E=";
               };
             }))
           ]
