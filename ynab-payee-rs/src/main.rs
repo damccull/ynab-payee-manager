@@ -30,8 +30,8 @@ const HEADER_SVG: Asset = asset!("/assets/header.svg");
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 
 const DATABASE_NAME: &str = "ynab-payee-manager";
-const DATABASE_VERSION: u32 = 3;
-const KNOWLEDGE_STORE_NAME: &str = "knowledge_store";
+const DATABASE_VERSION: u32 = 6;
+const KNOWLEDGE_STORE_NAME: &str = "server_knowledge";
 const PAYEES_STORE_NAME: &str = "payees";
 
 /// Personal Access Token for YNAB account
@@ -74,7 +74,8 @@ async fn create_database() -> Result<Database, idb::Error> {
         // Prepare object store parameters
         let mut knowledge_params = ObjectStoreParams::new();
         knowledge_params.auto_increment(true);
-        knowledge_params.key_path(Some(KeyPath::new_single("name")));
+        // knowledge_params.key_path(Some(KeyPath::new_single("name")));
+        knowledge_params.key_path(None);
         let knowledge_store = database
             .create_object_store(KNOWLEDGE_STORE_NAME, knowledge_params)
             .map_err(|e| anyhow::anyhow!("unable to create server_knowledge store: {:#?}", e));
@@ -97,7 +98,10 @@ async fn replace_payees(
 ) -> anyhow::Result<(Vec<JsValue>, JsValue)> {
     debug!("adding {} payees", &data.payees.len());
     let transaction = database
-        .transaction(&[PAYEES_STORE_NAME], idb::TransactionMode::ReadWrite)
+        .transaction(
+            &[PAYEES_STORE_NAME, KNOWLEDGE_STORE_NAME],
+            idb::TransactionMode::ReadWrite,
+        )
         .map_err(|e| anyhow::anyhow!("unable to start transaction: {:#?}", e))?;
 
     let store = transaction
@@ -132,17 +136,25 @@ async fn replace_payees(
         .object_store(KNOWLEDGE_STORE_NAME)
         .map_err(|e| anyhow::anyhow!("unable to get object store: {:#?}", e))?;
 
+    kstore
+        .clear()
+        .map_err(|e| anyhow::anyhow!("unable to clear the store: {:#?}", e))?
+        .await
+        .map_err(|e| anyhow::anyhow!("unable to clear the store: {:#?}", e))?;
+
     let knowledge = kstore
         .add(
             &data
                 .server_knowledge
                 .serialize(&Serializer::json_compatible())
                 .map_err(|e| anyhow::anyhow!("unable to serialize server_knowledge: {:#?}", e))?,
-            None,
+            Some(&JsValue::from_str("payees")),
         )
         .map_err(|e| anyhow::anyhow!("unable to store server_knowledge: {:#?}", e))?
         .await
         .map_err(|e| anyhow::anyhow!("unable to store server_knowledge: {:#?}", e))?;
+
+    debug!("added server knowledge: {:#?}", &knowledge);
 
     transaction
         .commit()
@@ -150,7 +162,7 @@ async fn replace_payees(
         .await
         .map_err(|e| anyhow::anyhow!("unable to commit transaction: {:#?}", e))?;
 
-    debug!("added {} payees", &ids.len());
+    debug!("added {:#?} payees", &ids.len());
 
     Ok((ids, knowledge))
 }
@@ -258,7 +270,9 @@ fn Payees() -> Element {
         // debug!("{:#?}", ynabresponse);
         debug!("got payees from ynab api and stored in local cache");
         debug!("adding payees to indexdb");
-        replace_payees(&db, &ynabresponse.data).await;
+        replace_payees(&db, &ynabresponse.data).await.map_err(|e| {
+            error!("Failed in replace_payees: {:#?}", e);
+        });
         *PAYEES_CACHE.write() = ynabresponse.data.payees;
         *PAYEES_KNOWLEDGE.write() = ynabresponse.data.server_knowledge;
         debug!("added payees to indexdb")
