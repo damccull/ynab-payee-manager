@@ -91,8 +91,11 @@ async fn create_database() -> Result<Database, idb::Error> {
     open_request.await
 }
 
-async fn replace_payees(database: &Database, data: &ResponseData) -> anyhow::Result<Vec<JsValue>> {
-    debug!("adding {} payees", &payees.len());
+async fn replace_payees(
+    database: &Database,
+    data: &ResponseData,
+) -> anyhow::Result<(Vec<JsValue>, JsValue)> {
+    debug!("adding {} payees", &data.payees.len());
     let transaction = database
         .transaction(&[PAYEES_STORE_NAME], idb::TransactionMode::ReadWrite)
         .map_err(|e| anyhow::anyhow!("unable to start transaction: {:#?}", e))?;
@@ -134,7 +137,7 @@ async fn replace_payees(database: &Database, data: &ResponseData) -> anyhow::Res
             &data
                 .server_knowledge
                 .serialize(&Serializer::json_compatible())
-                .map_err(|e| anyhow::anyhow!("unable to serialize server_knowledge: {:#?}", e)),
+                .map_err(|e| anyhow::anyhow!("unable to serialize server_knowledge: {:#?}", e))?,
             None,
         )
         .map_err(|e| anyhow::anyhow!("unable to store server_knowledge: {:#?}", e))?
@@ -255,7 +258,7 @@ fn Payees() -> Element {
         // debug!("{:#?}", ynabresponse);
         debug!("got payees from ynab api and stored in local cache");
         debug!("adding payees to indexdb");
-        replace_payees(&db, ynabresponse.data).await;
+        replace_payees(&db, &ynabresponse.data).await;
         *PAYEES_CACHE.write() = ynabresponse.data.payees;
         *PAYEES_KNOWLEDGE.write() = ynabresponse.data.server_knowledge;
         debug!("added payees to indexdb")
