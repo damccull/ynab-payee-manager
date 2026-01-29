@@ -34,6 +34,8 @@ const DATABASE_VERSION: u32 = 6;
 const KNOWLEDGE_STORE_NAME: &str = "server_knowledge";
 const PAYEES_STORE_NAME: &str = "payees";
 
+const SERVER_KNOWLEDGE_KEY_PAYEES: &str = "payees";
+
 /// Personal Access Token for YNAB account
 static PAT: GlobalSignal<Option<&str>> = GlobalSignal::new(|| None);
 /// Local in-memory cache of payees pulled from the API; don't update this too often
@@ -148,7 +150,7 @@ async fn replace_payees(
                 .server_knowledge
                 .serialize(&Serializer::json_compatible())
                 .map_err(|e| anyhow::anyhow!("unable to serialize server_knowledge: {:#?}", e))?,
-            Some(&JsValue::from_str("payees")),
+            Some(&JsValue::from_str(SERVER_KNOWLEDGE_KEY_PAYEES)),
         )
         .map_err(|e| anyhow::anyhow!("unable to store server_knowledge: {:#?}", e))?
         .await
@@ -199,7 +201,7 @@ async fn get_payees(databse: &Database) -> anyhow::Result<(Vec<Payee>, u64)> {
         .map_err(|e| anyhow::anyhow!("unable to get object store: {:#?}", e))?;
 
     let knowledge = kstore
-        .get(JsValue::from_str("payees"))
+        .get(JsValue::from_str(SERVER_KNOWLEDGE_KEY_PAYEES))
         .map_err(|e| anyhow::anyhow!("unable to get stored payees: {:#?}", e))?
         .await
         .map_err(|e| anyhow::anyhow!("unable to await stored payees: {:#?}", e))?
