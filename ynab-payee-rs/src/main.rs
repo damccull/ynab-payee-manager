@@ -30,11 +30,15 @@ const HEADER_SVG: Asset = asset!("/assets/header.svg");
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 
 const DATABASE_NAME: &str = "ynab-payee-manager";
+const DATABASE_VERSION: u32 = 3;
+const KNOWLEDGE_STORE_NAME: &str = "knowledge_store";
+const PAYEES_STORE_NAME: &str = "payees";
 
 /// Personal Access Token for YNAB account
 static PAT: GlobalSignal<Option<&str>> = GlobalSignal::new(|| None);
 /// Local in-memory cache of payees pulled from the API; don't update this too often
 static PAYEES_CACHE: GlobalSignal<Vec<Payee>> = GlobalSignal::new(|| Vec::new());
+static PAYEES_KNOWLEDGE: GlobalSignal<u64> = GlobalSignal::new(|| 0);
 /// The budget ID to use when talking to the API
 // static BUDGET: GlobalSignal<&str> = GlobalSignal::new(|| "e71410e0-306f-42bb-8e79-ac905a392a9a");
 static BUDGET: GlobalSignal<&str> = GlobalSignal::new(|| "594b4cb4-028e-41a9-a908-d00ee0647611");
@@ -46,7 +50,7 @@ fn main() {
 async fn create_database() -> Result<Database, idb::Error> {
     let factory = Factory::new()?;
     let mut open_request = factory
-        .open(DATABASE_NAME, Some(2))
+        .open(DATABASE_NAME, Some(DATABASE_VERSION))
         .expect("unable to open database");
 
     // Add an upgrade handler for the database
@@ -54,18 +58,26 @@ async fn create_database() -> Result<Database, idb::Error> {
         // Get database instance from event
         let database = event.database().expect("unable to get database from event");
 
-        database.delete_object_store("payees");
+        database.delete_object_store(PAYEES_STORE_NAME);
+        database.delete_object_store(KNOWLEDGE_STORE_NAME);
 
         // Prepare object store parameters
-        let mut store_parameters = ObjectStoreParams::new();
-        store_parameters.auto_increment(true);
-        store_parameters.key_path(Some(KeyPath::new_single("id")));
+        let mut payees_params = ObjectStoreParams::new();
+        payees_params.auto_increment(true);
+        payees_params.key_path(Some(KeyPath::new_single("id")));
 
         // Create 'payees' object store
         let payees_store = database
-            .create_object_store("payees", store_parameters)
-            .expect("unable to create object store");
+            .create_object_store(PAYEES_STORE_NAME, payees_params)
+            .map_err(|e| anyhow::anyhow!("unable to create payees store: {:#?}", e));
 
+        // Prepare object store parameters
+        let mut knowledge_params = ObjectStoreParams::new();
+        knowledge_params.auto_increment(true);
+        knowledge_params.key_path(Some(KeyPath::new_single("name")));
+        let knowledge_store = database
+            .create_object_store(KNOWLEDGE_STORE_NAME, knowledge_params)
+            .map_err(|e| anyhow::anyhow!("unable to create server_knowledge store: {:#?}", e));
         // Prepare index parameters
         // let mut index_parameters = IndexParams::new();
         // index_parameters.unique(true);
@@ -79,14 +91,14 @@ async fn create_database() -> Result<Database, idb::Error> {
     open_request.await
 }
 
-async fn replace_payees(database: &Database, payees: &Vec<Payee>) -> anyhow::Result<Vec<JsValue>> {
+async fn replace_payees(database: &Database, data: &ResponseData) -> anyhow::Result<Vec<JsValue>> {
     debug!("adding {} payees", &payees.len());
     let transaction = database
-        .transaction(&["payees"], idb::TransactionMode::ReadWrite)
+        .transaction(&[PAYEES_STORE_NAME], idb::TransactionMode::ReadWrite)
         .map_err(|e| anyhow::anyhow!("unable to start transaction: {:#?}", e))?;
 
     let store = transaction
-        .object_store("payees")
+        .object_store(PAYEES_STORE_NAME)
         .map_err(|e| anyhow::anyhow!("unable to get object store: {:#?}", e))?;
 
     store
@@ -96,7 +108,7 @@ async fn replace_payees(database: &Database, payees: &Vec<Payee>) -> anyhow::Res
         .map_err(|e| anyhow::anyhow!("unable to clear the store: {:#?}", e))?;
 
     let mut ids = Vec::new();
-    for payee in payees.iter() {
+    for payee in data.payees.iter() {
         trace!("adding payee: {:#?}", &payee);
         let id = store
             .add(
@@ -113,6 +125,22 @@ async fn replace_payees(database: &Database, payees: &Vec<Payee>) -> anyhow::Res
         ids.push(id);
     }
 
+    let kstore = transaction
+        .object_store(KNOWLEDGE_STORE_NAME)
+        .map_err(|e| anyhow::anyhow!("unable to get object store: {:#?}", e))?;
+
+    let knowledge = kstore
+        .add(
+            &data
+                .server_knowledge
+                .serialize(&Serializer::json_compatible())
+                .map_err(|e| anyhow::anyhow!("unable to serialize server_knowledge: {:#?}", e)),
+            None,
+        )
+        .map_err(|e| anyhow::anyhow!("unable to store server_knowledge: {:#?}", e))?
+        .await
+        .map_err(|e| anyhow::anyhow!("unable to store server_knowledge: {:#?}", e))?;
+
     transaction
         .commit()
         .map_err(|e| anyhow::anyhow!("unable to commit transaction: {:#?}", e))?
@@ -121,16 +149,16 @@ async fn replace_payees(database: &Database, payees: &Vec<Payee>) -> anyhow::Res
 
     debug!("added {} payees", &ids.len());
 
-    Ok(ids)
+    Ok((ids, knowledge))
 }
 
 async fn get_payees(databse: &Database) -> anyhow::Result<Vec<Payee>> {
     let transaction = databse
-        .transaction(&["payees"], idb::TransactionMode::ReadOnly)
+        .transaction(&[PAYEES_STORE_NAME], idb::TransactionMode::ReadOnly)
         .map_err(|e| anyhow::anyhow!("unable to start tranaction: {:#?}", e))?;
 
     let store = transaction
-        .object_store("payees")
+        .object_store(PAYEES_STORE_NAME)
         .map_err(|e| anyhow::anyhow!("unable to get object store: {:#?}", e))?;
 
     let stored_payees = store
@@ -225,10 +253,11 @@ fn Payees() -> Element {
         // debug!("{:?}", response.text().await);
         let ynabresponse: YnabResponse = response.json().await.unwrap();
         // debug!("{:#?}", ynabresponse);
-        *PAYEES_CACHE.write() = ynabresponse.data.payees;
         debug!("got payees from ynab api and stored in local cache");
         debug!("adding payees to indexdb");
-        replace_payees(&db, &*PAYEES_CACHE.read()).await;
+        replace_payees(&db, ynabresponse.data).await;
+        *PAYEES_CACHE.write() = ynabresponse.data.payees;
+        *PAYEES_KNOWLEDGE.write() = ynabresponse.data.server_knowledge;
         debug!("added payees to indexdb")
     };
 
@@ -236,6 +265,7 @@ fn Payees() -> Element {
         div {
             button { onclick: get_payees, id: "get_payees", "Get Payees" }
         }
+        p { "Server Knowledge: {PAYEES_KNOWLEDGE.read()}"}
         table {
             tr {
                 th { "ID" }
@@ -364,7 +394,7 @@ struct YnabResponse {
 #[derive(Debug, Deserialize)]
 struct ResponseData {
     payees: Vec<Payee>,
-    server_knowledge: i32,
+    server_knowledge: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
