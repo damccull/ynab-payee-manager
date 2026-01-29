@@ -5,13 +5,18 @@ layout {
     }
     pane split_direction="vertical" {
       pane {
+        name "shell/editor"
+        cwd "ynab-payee-rs"
         focus true
       }
       pane split_direction="horizontal" {
         pane size="60%" {
+          name "git"
           command "lazygit"
         }
         pane size="40%" {
+          name "execution"
+          cwd "ynab-payee-rs"
           // command "cargo"
           // args "watch" "-x" "test" "-x" "run"
         }
@@ -26,6 +31,7 @@ layout {
       plugin location="zellij:tab-bar"
     }
     pane {
+      name "database"
       command "just"
       args "surrealdb"
     }
