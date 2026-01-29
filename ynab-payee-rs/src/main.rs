@@ -4,7 +4,7 @@ use dioxus::{prelude::*, stores::index};
 use idb::{Database, DatabaseEvent, Factory, IndexParams, KeyPath, ObjectStoreParams};
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
-use serde_wasm_bindgen::Serializer;
+use serde_wasm_bindgen::{from_value, Serializer};
 use wasm_bindgen::JsValue;
 
 use anyhow::Context;
@@ -40,8 +40,8 @@ static PAT: GlobalSignal<Option<&str>> = GlobalSignal::new(|| None);
 static PAYEES_CACHE: GlobalSignal<Vec<Payee>> = GlobalSignal::new(|| Vec::new());
 static PAYEES_KNOWLEDGE: GlobalSignal<u64> = GlobalSignal::new(|| 0);
 /// The budget ID to use when talking to the API
-// static BUDGET: GlobalSignal<&str> = GlobalSignal::new(|| "e71410e0-306f-42bb-8e79-ac905a392a9a");
-static BUDGET: GlobalSignal<&str> = GlobalSignal::new(|| "594b4cb4-028e-41a9-a908-d00ee0647611");
+static BUDGET: GlobalSignal<&str> = GlobalSignal::new(|| "e71410e0-306f-42bb-8e79-ac905a392a9a");
+// static BUDGET: GlobalSignal<&str> = GlobalSignal::new(|| "594b4cb4-028e-41a9-a908-d00ee0647611");
 
 fn main() {
     dioxus::launch(App);
@@ -167,9 +167,12 @@ async fn replace_payees(
     Ok((ids, knowledge))
 }
 
-async fn get_payees(databse: &Database) -> anyhow::Result<Vec<Payee>> {
+async fn get_payees(databse: &Database) -> anyhow::Result<(Vec<Payee>, u64)> {
     let transaction = databse
-        .transaction(&[PAYEES_STORE_NAME], idb::TransactionMode::ReadOnly)
+        .transaction(
+            &[PAYEES_STORE_NAME, KNOWLEDGE_STORE_NAME],
+            idb::TransactionMode::ReadOnly,
+        )
         .map_err(|e| anyhow::anyhow!("unable to start tranaction: {:#?}", e))?;
 
     let store = transaction
@@ -191,11 +194,29 @@ async fn get_payees(databse: &Database) -> anyhow::Result<Vec<Payee>> {
         .collect::<anyhow::Result<Vec<Payee>>>()
         .map_err(|e| anyhow::anyhow!("unable to get stored payees: {:#?}", e))?;
 
+    let kstore = transaction
+        .object_store(KNOWLEDGE_STORE_NAME)
+        .map_err(|e| anyhow::anyhow!("unable to get object store: {:#?}", e))?;
+
+    let knowledge = kstore
+        .get(JsValue::from_str("payees"))
+        .map_err(|e| anyhow::anyhow!("unable to get stored payees: {:#?}", e))?
+        .await
+        .map_err(|e| anyhow::anyhow!("unable to await stored payees: {:#?}", e))?
+        .ok_or_else(|| anyhow::anyhow!("no server knowledge found in indexdb"))?;
+
+    let knowledge = from_value::<u64>(knowledge).map_err(|e| {
+        anyhow::anyhow!(
+            "unable to deserialize server knowledge from indexdb: {:#?}",
+            e
+        )
+    })?;
+
     transaction
         .await
         .map_err(|e| anyhow::anyhow!("unable to await transaction: {:#?}", e))?;
 
-    Ok(stored_payees)
+    Ok((stored_payees, knowledge))
 }
 
 #[component]
@@ -241,8 +262,9 @@ fn Payees() -> Element {
     use_resource(move || async move {
         let db = use_context::<Arc<Database>>();
         match get_payees(&db).await {
-            Ok(payees) => {
+            Ok((payees, knowledge)) => {
                 *PAYEES_CACHE.write() = payees;
+                *PAYEES_KNOWLEDGE.write() = knowledge;
                 debug!("set PAYEES_CACHE from indexdb");
             }
             Err(e) => {
