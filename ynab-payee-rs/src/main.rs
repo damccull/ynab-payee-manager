@@ -30,7 +30,7 @@ const HEADER_SVG: Asset = asset!("/assets/header.svg");
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 
 const DATABASE_NAME: &str = "ynab-payee-manager";
-const DATABASE_VERSION: u32 = 6;
+const DATABASE_VERSION: u32 = 9;
 const KNOWLEDGE_STORE_NAME: &str = "server_knowledge";
 const PAYEES_STORE_NAME: &str = "payees";
 
@@ -71,24 +71,31 @@ async fn create_database() -> Result<Database, idb::Error> {
         // Create 'payees' object store
         let payees_store = database
             .create_object_store(PAYEES_STORE_NAME, payees_params)
-            .map_err(|e| anyhow::anyhow!("unable to create payees store: {:#?}", e));
+            .map_err(|e| error!("unable to create payees store: {:#?}", e))
+            .expect("unable to get object store for payees");
+
+        // Prepare index parameters
+        let mut payees_index_parameters = IndexParams::new();
+        payees_index_parameters.unique(false);
+
+        // Create an index for 'name' on the payees_store
+        payees_store
+            .create_index(
+                "name",
+                KeyPath::new_single("name"),
+                Some(payees_index_parameters),
+            )
+            .map_err(|e| error!("unable to create index: {:#?}", e));
 
         // Prepare object store parameters
         let mut knowledge_params = ObjectStoreParams::new();
         knowledge_params.auto_increment(true);
+
         // knowledge_params.key_path(Some(KeyPath::new_single("name")));
         knowledge_params.key_path(None);
         let knowledge_store = database
             .create_object_store(KNOWLEDGE_STORE_NAME, knowledge_params)
-            .map_err(|e| anyhow::anyhow!("unable to create server_knowledge store: {:#?}", e));
-        // Prepare index parameters
-        // let mut index_parameters = IndexParams::new();
-        // index_parameters.unique(true);
-
-        // Create an index for 'name' on the payees_store
-        // payees_store
-        //     .create_index("name", KeyPath::new_single("name"), Some(index_parameters))
-        //     .expect("unable to create index");
+            .map_err(|e| error!("unable to create server_knowledge store: {:#?}", e));
     });
 
     open_request.await
