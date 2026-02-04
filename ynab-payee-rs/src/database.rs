@@ -8,7 +8,7 @@ use crate::{
     models::{Payee, ResponseData},
     settings::{
         DATABASE_NAME, DATABASE_VERSION, KNOWLEDGE_STORE_NAME, PAYEES_STORE_NAME,
-        SERVER_KNOWLEDGE_KEY_PAYEES,
+        SERVER_KNOWLEDGE_KEY_PAYEES, SETTINGS_KEY_TOKEN, SETTINGS_STORE_NAME,
     },
 };
 
@@ -52,18 +52,47 @@ pub async fn create_database() -> Result<Database, idb::Error> {
 
         // Prepare object store parameters
         let mut knowledge_params = ObjectStoreParams::new();
-        knowledge_params.auto_increment(true);
+        knowledge_params.auto_increment(false);
 
         // knowledge_params.key_path(Some(KeyPath::new_single("name")));
         knowledge_params.key_path(None);
         let knowledge_store = database
             .create_object_store(KNOWLEDGE_STORE_NAME, knowledge_params)
             .map_err(|e| error!("unable to create server_knowledge store: {:#?}", e));
+
+        let mut settings_params = ObjectStoreParams::new();
+        settings_params.auto_increment(false);
+
+        let settings_store = database
+            .create_object_store(SETTINGS_STORE_NAME, settings_params)
+            .map_err(|e| error!("unable to create settings store: {:#?}", e))
+            .expect("unable to get object store for settings");
     });
 
     open_request.await
 }
 
+pub async fn store_ynab_token(database: &Database, token: &str) -> anyhow::Result<()> {
+    let transaction = database
+        .transaction(&[SETTINGS_STORE_NAME], idb::TransactionMode::ReadWrite)
+        .map_err(|e| anyhow::anyhow!("unable to start transaction: {:#?}", e))?;
+
+    let store = transaction
+        .object_store(SETTINGS_STORE_NAME)
+        .map_err(|e| anyhow::anyhow!("unable to get object store: {:#?}", e))?;
+
+    let id = store
+        .add(
+            &token
+                .serialize(&Serializer::json_compatible())
+                .map_err(|e| anyhow::anyhow!("unable to serialize setting: {:#?}", e))?,
+            Some(&JsValue::from_str(SETTINGS_KEY_TOKEN)),
+        )
+        .map_err(|e| anyhow::anyhow!("unable to store setting: {:#?}", e))?
+        .await
+        .map_err(|e| anyhow::anyhow!("unable to store setting: {:#?}", e))?;
+    Ok(())
+}
 pub async fn replace_payees(
     database: &Database,
     data: &ResponseData,

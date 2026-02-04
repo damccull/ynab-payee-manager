@@ -9,7 +9,7 @@ use wasm_bindgen::JsValue;
 
 use anyhow::Context;
 use ynab_payee_rs::{
-    database::{create_database, get_payees, replace_payees},
+    database::{create_database, get_payees, replace_payees, store_ynab_token},
     models::{Payee, YnabResponse},
 };
 
@@ -51,6 +51,13 @@ fn App() -> Element {
     let env_pat = env!("YNAB_PAT"); // TODO this bakes it into the binary, security risk
     *PAT.write() = Some(env_pat);
 
+    let store_token = move |db: Arc<Database>, token: String| async move {
+        debug!("storing test token into db: {:#?}", &db);
+        store_ynab_token(&db, &token).await.map_err(|e| {
+            error!("Failed in store_token: {:#?}", e);
+        });
+    };
+
     let db_resource = use_resource(move || async move {
         let db = create_database().await.expect("unable to open database");
         Arc::new(db)
@@ -62,6 +69,14 @@ fn App() -> Element {
         Some(db) => {
             use_context_provider(|| db.clone());
             debug!("added database handle to context");
+
+            // TODO: If database open, get ynab token if exists and verify not expired
+            // if expired or missing, display authenticate page
+
+            use_resource(move || async move {
+                let db = use_context::<Arc<Database>>();
+                store_token(db.clone(), "test_token".to_string()).await;
+            });
 
             rsx! {
                 document::Link { rel: "icon", href: FAVICON }
