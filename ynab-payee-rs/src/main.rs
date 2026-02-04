@@ -9,7 +9,7 @@ use wasm_bindgen::JsValue;
 
 use anyhow::Context;
 use ynab_payee_rs::{
-    database::{create_database, get_payees, replace_payees, store_ynab_token},
+    database::{create_database, get_payees, get_ynab_token, replace_payees, store_ynab_token},
     models::{Payee, YnabResponse},
 };
 
@@ -52,9 +52,9 @@ fn App() -> Element {
     *PAT.write() = Some(env_pat);
 
     let store_token = move |db: Arc<Database>, token: String| async move {
-        debug!("storing test token into db: {:#?}", &db);
+        debug!("storing test token in db");
         store_ynab_token(&db, &token).await.map_err(|e| {
-            error!("Failed in store_token: {:#?}", e);
+            error!("failed in store_token: {:#?}", e);
         });
     };
 
@@ -65,20 +65,51 @@ fn App() -> Element {
 
     let db_handle = db_resource.read().as_ref().cloned();
 
+    let token = use_resource(move || async move {
+        if let Some(db) = db_resource.read().as_ref().cloned() {
+            debug!("getting token from db");
+            get_ynab_token(&db)
+                .await
+                .map(|x| Some(x))
+                .map_err(|e| {
+                    error!("unable to get ynab token from database: {:#?}", &e);
+                    e
+                })
+                .unwrap_or(None)
+        } else {
+            None
+        }
+    })
+    .read()
+    .as_ref()
+    .cloned()
+    .flatten();
+
+    // Store a test token
+    use_resource(move || async move {
+        if let Some(db) = db_resource.read().as_ref().cloned() {
+            store_token(db.clone(), "test_token".to_string()).await;
+        }
+    });
+
     match db_handle {
         Some(db) => {
             use_context_provider(|| db.clone());
             debug!("added database handle to context");
 
-            // TODO: If database open, get ynab token if exists and verify not expired
-            // if expired or missing, display authenticate page
-
-            use_resource(move || async move {
-                let db = use_context::<Arc<Database>>();
-                store_token(db.clone(), "test_token".to_string()).await;
-            });
-
             rsx! {
+                match token {
+                    Some(x) => {
+                        rsx! {
+                            "Token available: {x}"
+                        }
+                    }
+                    None => {
+                        rsx! {
+                            "No token available"
+                        }
+                    }
+                }
                 document::Link { rel: "icon", href: FAVICON }
                 document::Link { rel: "stylesheet", href: MAIN_CSS } document::Link { rel: "stylesheet", href: TAILWIND_CSS }
                 Router::<Route> {}
