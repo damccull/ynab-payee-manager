@@ -83,11 +83,31 @@ fn App() -> Element {
             });
             use_context_provider(|| auth_actions.clone());
             debug!("added auth_actions handle to context");
+            let do_login = move |_| {
+                let aa = use_context::<AuthActions>();
+                async move {
+                    aa.store_token("test_token_from_login_button".to_owned());
+                }
+            };
 
-            rsx! {
-                document::Link { rel: "icon", href: FAVICON }
-                document::Link { rel: "stylesheet", href: MAIN_CSS } document::Link { rel: "stylesheet", href: TAILWIND_CSS }
-                Router::<Route> {}
+            match (auth_actions.token)() {
+                Some(token) => {
+                    rsx! {
+                        document::Link { rel: "icon", href: FAVICON }
+                        document::Link { rel: "stylesheet", href: MAIN_CSS } document::Link { rel: "stylesheet", href: TAILWIND_CSS }
+                        Router::<Route> {}
+                    }
+                }
+                None => {
+                    rsx! {
+                        p{"Need to login"},
+                        button {
+                            id: "login",
+                            onclick: do_login,
+                            "Login"
+                        }
+                    }
+                }
             }
         }
         None => {
@@ -246,13 +266,6 @@ fn Navbar() -> Element {
     let auth_actions = use_context::<AuthActions>();
     let token = auth_actions.token;
 
-    let do_login = move |_| {
-        let aa = auth_actions.clone();
-        async move {
-            aa.store_token("test_token_from_login_button".to_owned());
-        }
-    };
-
     rsx! {
         div {
             id: "navbar",
@@ -271,24 +284,6 @@ fn Navbar() -> Element {
             Link {
                 to: Route::Transactions {},
                 "Transactions"
-            }
-        }
-        match token() {
-            Some(x) => {
-                let x = format!("{:?}",x);
-                rsx! {
-                    "Token available: {x}"
-                }
-            }
-            None => {
-                rsx! {
-                    button {
-                        id: "login",
-                        onclick: do_login,
-                        "Login"
-                    }
-                    "No token available"
-                }
             }
         }
         // NOTE: Header component reference can go here
