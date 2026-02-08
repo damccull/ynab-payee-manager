@@ -246,6 +246,13 @@ fn Navbar() -> Element {
     let auth_actions = use_context::<AuthActions>();
     let token = auth_actions.token;
 
+    let do_login = move |_| {
+        let aa = auth_actions.clone();
+        async move {
+            aa.store_token("test_token_from_login_button".to_owned());
+        }
+    };
+
     rsx! {
         div {
             id: "navbar",
@@ -275,6 +282,11 @@ fn Navbar() -> Element {
             }
             None => {
                 rsx! {
+                    button {
+                        id: "login",
+                        onclick: do_login,
+                        "Login"
+                    }
                     "No token available"
                 }
             }
