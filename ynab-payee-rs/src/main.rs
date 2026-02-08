@@ -11,6 +11,7 @@ use anyhow::Context;
 use ynab_payee_rs::{
     database::{create_database, get_payees, get_ynab_token, replace_payees, store_ynab_token},
     models::{Payee, YnabResponse},
+    AuthActions,
 };
 
 #[derive(Debug, Clone, Routable, PartialEq)]
@@ -39,8 +40,8 @@ static PAT: GlobalSignal<Option<&str>> = GlobalSignal::new(|| None);
 static PAYEES_CACHE: GlobalSignal<Vec<Payee>> = GlobalSignal::new(|| Vec::new());
 static PAYEES_KNOWLEDGE: GlobalSignal<u64> = GlobalSignal::new(|| 0);
 /// The budget ID to use when talking to the API
-static BUDGET: GlobalSignal<&str> = GlobalSignal::new(|| "e71410e0-306f-42bb-8e79-ac905a392a9a");
-// static BUDGET: GlobalSignal<&str> = GlobalSignal::new(|| "594b4cb4-028e-41a9-a908-d00ee0647611");
+// static BUDGET: GlobalSignal<&str> = GlobalSignal::new(|| "e71410e0-306f-42bb-8e79-ac905a392a9a");
+static BUDGET: GlobalSignal<&str> = GlobalSignal::new(|| "594b4cb4-028e-41a9-a908-d00ee0647611");
 
 fn main() {
     dioxus::launch(App);
@@ -65,51 +66,25 @@ fn App() -> Element {
 
     let db_handle = db_resource.read().as_ref().cloned();
 
-    let token = use_resource(move || async move {
-        if let Some(db) = db_resource.read().as_ref().cloned() {
-            debug!("getting token from db");
-            get_ynab_token(&db)
-                .await
-                .map(|x| Some(x))
-                .map_err(|e| {
-                    error!("unable to get ynab token from database: {:#?}", &e);
-                    e
-                })
-                .unwrap_or(None)
-        } else {
-            None
-        }
-    })
-    .read()
-    .as_ref()
-    .cloned()
-    .flatten();
-
     // Store a test token
-    use_resource(move || async move {
-        if let Some(db) = db_resource.read().as_ref().cloned() {
-            store_token(db.clone(), "test_token".to_string()).await;
-        }
-    });
+    // use_resource(move || async move {
+    //     if let Some(db) = db_resource.read().as_ref().cloned() {
+    //         store_token(db.clone(), "test_token".to_string()).await;
+    //     }
+    // });
 
     match db_handle {
         Some(db) => {
             use_context_provider(|| db.clone());
             debug!("added database handle to context");
+            let auth_actions = use_hook(move || {
+                let aa = AuthActions::new(db.clone());
+                aa
+            });
+            use_context_provider(|| auth_actions.clone());
+            debug!("added auth_actions handle to context");
 
             rsx! {
-                match token {
-                    Some(x) => {
-                        rsx! {
-                            "Token available: {x}"
-                        }
-                    }
-                    None => {
-                        rsx! {
-                            "No token available"
-                        }
-                    }
-                }
                 document::Link { rel: "icon", href: FAVICON }
                 document::Link { rel: "stylesheet", href: MAIN_CSS } document::Link { rel: "stylesheet", href: TAILWIND_CSS }
                 Router::<Route> {}
@@ -268,6 +243,9 @@ fn Transaction() -> Element {
 /// Shared navbar component.
 #[component]
 fn Navbar() -> Element {
+    let auth_actions = use_context::<AuthActions>();
+    let token = auth_actions.token;
+
     rsx! {
         div {
             id: "navbar",
@@ -286,6 +264,19 @@ fn Navbar() -> Element {
             Link {
                 to: Route::Transactions {},
                 "Transactions"
+            }
+        }
+        match token() {
+            Some(x) => {
+                let x = format!("{:?}",x);
+                rsx! {
+                    "Token available: {x}"
+                }
+            }
+            None => {
+                rsx! {
+                    "No token available"
+                }
             }
         }
         // NOTE: Header component reference can go here

@@ -72,7 +72,7 @@ pub async fn create_database() -> Result<Database, idb::Error> {
     open_request.await
 }
 
-pub async fn store_ynab_token(database: &Database, token: &str) -> anyhow::Result<()> {
+pub async fn store_ynab_token(database: &Database, token: &str) -> anyhow::Result<String> {
     let transaction = database
         .transaction(&[SETTINGS_STORE_NAME], idb::TransactionMode::ReadWrite)
         .map_err(|e| anyhow::anyhow!("unable to start transaction: {:#?}", e))?;
@@ -91,10 +91,10 @@ pub async fn store_ynab_token(database: &Database, token: &str) -> anyhow::Resul
         .map_err(|e| anyhow::anyhow!("unable to store setting: {:#?}", e))?
         .await
         .map_err(|e| anyhow::anyhow!("unable to store setting: {:#?}", e))?;
-    Ok(())
+    Ok(token.to_owned())
 }
 
-pub async fn get_ynab_token(database: &Database) -> anyhow::Result<String> {
+pub async fn get_ynab_token(database: &Database) -> anyhow::Result<Option<String>> {
     let transaction = database
         .transaction(&[SETTINGS_STORE_NAME], idb::TransactionMode::ReadOnly)
         .map_err(|e| anyhow::anyhow!("unable to start transaction: {:#?}", e))?;
@@ -107,19 +107,28 @@ pub async fn get_ynab_token(database: &Database) -> anyhow::Result<String> {
         .get(JsValue::from_str(SETTINGS_KEY_TOKEN))
         .map_err(|e| anyhow::anyhow!("unable to get stored token: {:#?}", e))?
         .await
-        .map_err(|e| anyhow::anyhow!("unable to await stored token: {:#?}", e))?
-        .ok_or_else(|| anyhow::anyhow!("no token found in indexdb"))?;
-
-    let token = from_value::<String>(token).map_err(|e| {
-        anyhow::anyhow!(
-            "unable to deserialize server knowledge from indexdb: {:#?}",
-            e
-        )
-    })?;
+        .map_err(|e| anyhow::anyhow!("unable to await stored token: {:#?}", e))?;
 
     transaction
         .await
         .map_err(|e| anyhow::anyhow!("unable to await transaction: {:#?}", e))?;
+
+    // Deserialize the JsValue
+
+    let token =
+        if let Some(token) = token {
+            Some(from_value::<String>(token).map_err(|e| {
+                anyhow::anyhow!("unable to deserialize token from indexdb: {:#?}", e)
+            })?)
+        } else {
+            None
+        };
+    // let token = from_value::<Option<String>>(token).map_err(|e| {
+    //     anyhow::anyhow!(
+    //         "unable to deserialize server knowledge from indexdb: {:#?}",
+    //         e
+    //     )
+    // })?;
 
     Ok(token)
 }
