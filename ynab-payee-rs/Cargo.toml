@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.100"
+chrono = { version = "0.4.43", features = ["serde", "wasm-bindgen"] }
 dioxus = { version = "0.7.1", features = ["router"] }
 env = "1.0.1"
 idb = "0.6.5"

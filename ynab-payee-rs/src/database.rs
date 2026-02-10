@@ -10,6 +10,7 @@ use crate::{
         DATABASE_NAME, DATABASE_VERSION, KNOWLEDGE_STORE_NAME, PAYEES_STORE_NAME,
         SERVER_KNOWLEDGE_KEY_PAYEES, SETTINGS_KEY_TOKEN, SETTINGS_STORE_NAME,
     },
+    YnabToken,
 };
 
 pub async fn create_database() -> Result<Database, idb::Error> {
@@ -72,7 +73,7 @@ pub async fn create_database() -> Result<Database, idb::Error> {
     open_request.await
 }
 
-pub async fn store_ynab_token(database: &Database, token: &str) -> anyhow::Result<String> {
+pub async fn store_ynab_token(database: &Database, token: YnabToken) -> anyhow::Result<YnabToken> {
     let transaction = database
         .transaction(&[SETTINGS_STORE_NAME], idb::TransactionMode::ReadWrite)
         .map_err(|e| anyhow::anyhow!("unable to start transaction: {:#?}", e))?;
@@ -94,7 +95,7 @@ pub async fn store_ynab_token(database: &Database, token: &str) -> anyhow::Resul
     Ok(token.to_owned())
 }
 
-pub async fn get_ynab_token(database: &Database) -> anyhow::Result<Option<String>> {
+pub async fn get_ynab_token(database: &Database) -> anyhow::Result<Option<YnabToken>> {
     let transaction = database
         .transaction(&[SETTINGS_STORE_NAME], idb::TransactionMode::ReadOnly)
         .map_err(|e| anyhow::anyhow!("unable to start transaction: {:#?}", e))?;
@@ -117,7 +118,7 @@ pub async fn get_ynab_token(database: &Database) -> anyhow::Result<Option<String
 
     let token =
         if let Some(token) = token {
-            Some(from_value::<String>(token).map_err(|e| {
+            Some(from_value::<YnabToken>(token).map_err(|e| {
                 anyhow::anyhow!("unable to deserialize token from indexdb: {:#?}", e)
             })?)
         } else {

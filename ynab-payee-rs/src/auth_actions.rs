@@ -1,12 +1,19 @@
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use dioxus::{
     core::spawn,
+    prelude::debug,
     signals::{ReadableExt, Signal, WritableExt},
 };
 use idb::Database;
 
-use crate::database::{get_ynab_token, store_ynab_token};
+use crate::{
+    database::{get_ynab_token, store_ynab_token},
+    YnabToken,
+};
+
+#[derive(Debug)]
 pub enum AuthActionStatus {
     Idle,
     Loading,
@@ -14,11 +21,12 @@ pub enum AuthActionStatus {
     Error(anyhow::Error),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AuthActions {
     db: Arc<Database>,
-    pub token: Signal<Option<String>>,
+    pub token: Signal<Option<YnabToken>>,
     pub status: Signal<AuthActionStatus>,
+    expires: DateTime<Utc>,
 }
 
 impl AuthActions {
@@ -27,19 +35,21 @@ impl AuthActions {
             db,
             status: Signal::new(AuthActionStatus::Idle),
             token: Signal::new(None),
+            expires: Utc::now(),
         };
         aa.get_token();
         aa
     }
 
-    pub fn store_token(&self, token: String) {
+    pub fn store_token(&self, token: YnabToken) {
+        debug!("storing token: {:#?}", &token);
         let db = self.db.clone();
         let mut status = self.status;
         let mut thetoken = self.token;
         spawn(async move {
             status.set(AuthActionStatus::Saving);
 
-            match store_ynab_token(&db, &token).await {
+            match store_ynab_token(&db, token).await {
                 Ok(val) => thetoken.set(Some(val)),
                 Err(e) => {
                     status.set(AuthActionStatus::Error(anyhow::anyhow!(
@@ -62,7 +72,10 @@ impl AuthActions {
             status.set(AuthActionStatus::Loading);
 
             match get_ynab_token(&db).await {
-                Ok(val) => token.set(val),
+                Ok(val) => {
+                    debug!("token retrieved from indexdb: {:#?}", &val);
+                    token.set(val);
+                }
                 Err(e) => {
                     status.set(AuthActionStatus::Error(anyhow::anyhow!(
                         "unable to get token from indexdb: {:#?}",

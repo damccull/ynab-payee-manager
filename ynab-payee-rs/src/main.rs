@@ -54,7 +54,7 @@ fn App() -> Element {
 
     let store_token = move |db: Arc<Database>, token: String| async move {
         debug!("storing test token in db");
-        store_ynab_token(&db, &token).await.map_err(|e| {
+        store_ynab_token(&db, token.into()).await.map_err(|e| {
             error!("failed in store_token: {:#?}", e);
         });
     };
@@ -86,19 +86,21 @@ fn App() -> Element {
             let do_login = move |_| {
                 let aa = use_context::<AuthActions>();
                 async move {
-                    aa.store_token("test_token_from_login_button".to_owned());
+                    aa.store_token("test_token_from_login_button".into());
                 }
             };
 
-            match (auth_actions.token)() {
-                Some(token) => {
+            let token = (auth_actions.token)();
+            debug!("token in main: {:#?}", &token);
+            match token {
+                Some(token) if !token.is_expired() => {
                     rsx! {
                         document::Link { rel: "icon", href: FAVICON }
                         document::Link { rel: "stylesheet", href: MAIN_CSS } document::Link { rel: "stylesheet", href: TAILWIND_CSS }
                         Router::<Route> {}
                     }
                 }
-                None => {
+                _ => {
                     rsx! {
                         p{"Need to login"},
                         button {
