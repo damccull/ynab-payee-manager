@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -20,8 +22,9 @@ impl YnabToken {
     /// Returns: YnabToken
     pub fn new(token: String) -> Self {
         let token_expires = Utc::now();
-        let two_hours = TimeDelta::hours(2);
-        let token_expires = token_expires + two_hours;
+        // TODO: Update this to accept seconds after parsing the token data
+        let expires_in = TimeDelta::hours(2);
+        let token_expires = token_expires + expires_in;
 
         Self {
             raw: token,
@@ -29,11 +32,11 @@ impl YnabToken {
         }
     }
 
-    pub fn is_expired(&self) -> bool {
-        Utc::now() >= self.expires_at
     /// Whether this token has expired or not.
     ///
     /// Returns: bool
+    pub fn is_valid(&self) -> bool {
+        Utc::now() < self.expires_at
     }
 }
 
@@ -45,5 +48,11 @@ impl From<&str> for YnabToken {
 impl From<String> for YnabToken {
     fn from(value: String) -> Self {
         YnabToken::new(value)
+    }
+}
+
+impl Display for YnabToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.raw)
     }
 }
