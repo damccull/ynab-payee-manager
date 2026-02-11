@@ -8,6 +8,16 @@ pub struct YnabToken {
 }
 
 impl YnabToken {
+    /// Creates a new [`YnabToken`] with a expiration sent by YNAB.
+    /// This time limit is determined by the YNAB API.
+    ///
+    /// Note: See the "Implicit Grant Flow" section of <https://api.ynab.com/#oauth-applications>
+    /// for more information
+    ///
+    /// Parameters:
+    /// * **token**: _String_ - The opaque token string returned from the YNAB API
+    ///
+    /// Returns: YnabToken
     pub fn new(token: String) -> Self {
         let token_expires = Utc::now();
         let two_hours = TimeDelta::hours(2);
@@ -21,6 +31,9 @@ impl YnabToken {
 
     pub fn is_expired(&self) -> bool {
         Utc::now() >= self.expires_at
+    /// Whether this token has expired or not.
+    ///
+    /// Returns: bool
     }
 }
 

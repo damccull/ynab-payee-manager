@@ -30,6 +30,7 @@ pub struct AuthActions {
 }
 
 impl AuthActions {
+    /// Creates a new AuthActions and hydrates the token ([`YnabToken`]) from indexdb if it exists
     pub fn new(db: Arc<Database>) -> Self {
         let aa = Self {
             db,
@@ -41,6 +42,7 @@ impl AuthActions {
         aa
     }
 
+    /// Stores a token in the indexdb and hydrates this [`AuthActions`]'s [`YnabToken`]
     pub fn store_token(&self, token: YnabToken) {
         debug!("storing token: {:#?}", &token);
         let db = self.db.clone();
