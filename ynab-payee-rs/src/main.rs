@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use dioxus::{prelude::*, stores::index};
+use dioxus::{html::nav, prelude::*, stores::index};
 use idb::{Database, DatabaseEvent, Factory, IndexParams, KeyPath, ObjectStoreParams};
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -18,15 +18,10 @@ use ynab_payee_rs::{
 #[rustfmt::skip]
 enum Route {
     #[layout(Navbar)]
-    // #[route("/")]
-    // Home {},
-    // #[route("/blog/:id")]
-    // Blog { id: i32 },
-    #[route("/")]
-    // #[route("/payees")]
-    Payees {},
-    #[route("/transactions")]
-    Transactions {},
+        #[route("/")]
+        Payees {},
+        #[route("/transactions")]
+        Transactions {},
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
@@ -34,8 +29,6 @@ const MAIN_CSS: Asset = asset!("/assets/main.css");
 const HEADER_SVG: Asset = asset!("/assets/header.svg");
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 
-/// Personal Access Token for YNAB account
-static PAT: GlobalSignal<Option<&str>> = GlobalSignal::new(|| None);
 /// Local in-memory cache of payees pulled from the API; don't update this too often
 static PAYEES_CACHE: GlobalSignal<Vec<Payee>> = GlobalSignal::new(|| Vec::new());
 static PAYEES_KNOWLEDGE: GlobalSignal<u64> = GlobalSignal::new(|| 0);
@@ -49,15 +42,12 @@ fn main() {
 
 #[component]
 fn App() -> Element {
-    let env_pat = env!("YNAB_PAT"); // TODO this bakes it into the binary, security risk
-    *PAT.write() = Some(env_pat);
+    info!("ATTENTION: Some of the debug code may display your YNAB oauth2 token.");
+    info!("This is only stored in your browser and never sent to any server");
+    info!("other than YNAB's API. Nobody but you can see your logs, or your");
+    info!("YNAB oauth2 token.");
 
-    let store_token = move |db: Arc<Database>, token: String| async move {
-        debug!("storing test token in db");
-        store_ynab_token(&db, token.into()).await.map_err(|e| {
-            error!("failed in store_token: {:#?}", e);
-        });
-    };
+    let callback_access_token = get_token_from_hash();
 
     let db_resource = use_resource(move || async move {
         let db = create_database().await.expect("unable to open database");
@@ -65,13 +55,6 @@ fn App() -> Element {
     });
 
     let db_handle = db_resource.read().as_ref().cloned();
-
-    // Store a test token
-    // use_resource(move || async move {
-    //     if let Some(db) = db_resource.read().as_ref().cloned() {
-    //         store_token(db.clone(), "test_token".to_string()).await;
-    //     }
-    // });
 
     match db_handle {
         Some(db) => {
@@ -83,20 +66,35 @@ fn App() -> Element {
             });
             use_context_provider(|| auth_actions.clone());
             debug!("added auth_actions handle to context");
-            let do_login = move |_| {
-                let aa = use_context::<AuthActions>();
-                async move {
-                    aa.store_token("test_token_from_login_button".into());
+
+            let aa = auth_actions.clone();
+            use_hook(move || {
+                if let Some(token) = callback_access_token {
+                    aa.store_token(token.into());
                 }
+            });
+            let do_login = move |_| {
+                let auth_url = "https://app.ynab.com/oauth/authorize?client_id=Dszs-ubBjiUIP9pEHY7znF9LI_GrFdWSErx8zj84JWA&redirect_uri=http%3A%2F%2Flocalhost%3A8080&response_type=token&scope=";
+
+                // Send user to ynab login page
+                if let Some(window) = web_sys::window() {
+                    let _ = window.location().set_href(auth_url);
+                }
+                // let aa = use_context::<AuthActions>();
+                // async move {
+                //     aa.store_token("test_token_from_login_button".into());
+                // }
             };
 
             let token = (auth_actions.token)();
             debug!("token in main: {:#?}", &token);
             match token {
-                Some(token) if !token.is_expired() => {
+                Some(token) if token.is_valid() => {
                     rsx! {
                         document::Link { rel: "icon", href: FAVICON }
                         document::Link { rel: "stylesheet", href: MAIN_CSS } document::Link { rel: "stylesheet", href: TAILWIND_CSS }
+
+                        p {"Code is {token}"}
                         Router::<Route> {}
                     }
                 }
@@ -120,12 +118,6 @@ fn App() -> Element {
     }
 }
 
-/// Home page
-#[component]
-fn Home() -> Element {
-    rsx! {}
-}
-
 /// Payees Page
 #[component]
 fn Payees() -> Element {
@@ -143,31 +135,40 @@ fn Payees() -> Element {
         }
     });
 
-    let get_payees = move |_| async move {
-        let db = use_context::<Arc<Database>>();
-        let httpclient = reqwest::Client::new();
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "Authorization",
-            format!("Bearer {}", PAT.unwrap()).parse().unwrap(),
-        );
-        let response = httpclient
-            .get(format!("https://api.ynab.com/v1/budgets/{}/payees", BUDGET))
-            .headers(headers)
-            .send()
-            .await
-            .unwrap();
-        // debug!("{:?}", response.text().await);
-        let ynabresponse: YnabResponse = response.json().await.unwrap();
-        // debug!("{:#?}", ynabresponse);
-        debug!("got payees from ynab api and stored in local cache");
-        debug!("adding payees to indexdb");
-        replace_payees(&db, &ynabresponse.data).await.map_err(|e| {
-            error!("Failed in replace_payees: {:#?}", e);
-        });
-        *PAYEES_CACHE.write() = ynabresponse.data.payees;
-        *PAYEES_KNOWLEDGE.write() = ynabresponse.data.server_knowledge;
-        debug!("added payees to indexdb")
+    let auth = use_context::<AuthActions>();
+    let token = (auth.token)();
+
+    let get_payees = move |_| {
+        let token = token.clone();
+
+        async move {
+            match token {
+                Some(t) if t.is_valid() => {
+                    let db = use_context::<Arc<Database>>();
+                    let httpclient = reqwest::Client::new();
+                    let mut headers = HeaderMap::new();
+                    headers.insert("Authorization", format!("Bearer {}", t).parse().unwrap());
+                    let response = httpclient
+                        .get(format!("https://api.ynab.com/v1/budgets/{}/payees", BUDGET))
+                        .headers(headers)
+                        .send()
+                        .await
+                        .unwrap();
+                    // debug!("{:?}", response.text().await);
+                    let ynabresponse: YnabResponse = response.json().await.unwrap();
+                    // debug!("{:#?}", ynabresponse);
+                    debug!("got payees from ynab api and stored in local cache");
+                    debug!("adding payees to indexdb");
+                    replace_payees(&db, &ynabresponse.data).await.map_err(|e| {
+                        error!("Failed in replace_payees: {:#?}", e);
+                    });
+                    *PAYEES_CACHE.write() = ynabresponse.data.payees;
+                    *PAYEES_KNOWLEDGE.write() = ynabresponse.data.server_knowledge;
+                    debug!("added payees to indexdb")
+                }
+                _ => error!("No valid token. Please sign in again."),
+            }
+        }
     };
 
     rsx! {
@@ -237,48 +238,12 @@ fn Transaction() -> Element {
     }
 }
 
-// /// Blog page
-// #[component]
-// pub fn Blog(id: i32) -> Element {
-//     rsx! {
-//         div {
-//             id: "blog",
-//
-//             // Content
-//             h1 { "This is blog #{id}!" }
-//             p { "In blog #{id}, we show how the Dioxus router works and how URL parameters can be passed as props to our route components." }
-//
-//             // Navigation links
-//             Link {
-//                 to: Route::Blog { id: id - 1 },
-//                 "Previous"
-//             }
-//             span { " <---> " }
-//             Link {
-//                 to: Route::Blog { id: id + 1 },
-//                 "Next"
-//             }
-//         }
-//     }
-// }
-
 /// Shared navbar component.
 #[component]
 fn Navbar() -> Element {
-    let auth_actions = use_context::<AuthActions>();
-    let token = auth_actions.token;
-
     rsx! {
         div {
             id: "navbar",
-            // Link {
-            //     to: Route::Home {},
-            //     "Home"
-            // }
-            // Link {
-            //     to: Route::Blog { id: 1 },
-            //     "Blog"
-            // }
             Link {
                 to: Route::Payees {},
                 "Payees"
@@ -297,4 +262,20 @@ fn Navbar() -> Element {
 
         Outlet::<Route> {}
     }
+}
+
+fn get_token_from_hash() -> Option<String> {
+    let window = web_sys::window()?;
+    let hash = window.location().hash().ok()?;
+
+    debug!("hash string: {:#?}", &hash);
+
+    if hash.is_empty() {
+        // Empty string, not valid
+        return None;
+    }
+
+    let fragment = hash.trim_start_matches('#');
+    let params = web_sys::UrlSearchParams::new_with_str(fragment).ok()?;
+    params.get("access_token")
 }
