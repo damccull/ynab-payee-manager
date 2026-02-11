@@ -13,7 +13,7 @@ use crate::{
     YnabToken,
 };
 
-pub async fn create_database() -> Result<Database, idb::Error> {
+pub async fn create_database() -> Result<Database, DatabaseError> {
     let factory = Factory::new()?;
     let mut open_request = factory
         .open(DATABASE_NAME, Some(DATABASE_VERSION))
@@ -70,17 +70,17 @@ pub async fn create_database() -> Result<Database, idb::Error> {
             .expect("unable to get object store for settings");
     });
 
-    open_request.await
+    Ok(open_request.await?)
 }
 
-pub async fn store_ynab_token(database: &Database, token: YnabToken) -> anyhow::Result<YnabToken> {
-    let transaction = database
-        .transaction(&[SETTINGS_STORE_NAME], idb::TransactionMode::ReadWrite)
-        .map_err(|e| anyhow::anyhow!("unable to start transaction: {:#?}", e))?;
+pub async fn store_ynab_token(
+    database: &Database,
+    token: YnabToken,
+) -> Result<YnabToken, DatabaseError> {
+    let transaction =
+        database.transaction(&[SETTINGS_STORE_NAME], idb::TransactionMode::ReadWrite)?;
 
-    let store = transaction
-        .object_store(SETTINGS_STORE_NAME)
-        .map_err(|e| anyhow::anyhow!("unable to get object store: {:#?}", e))?;
+    let store = transaction.object_store(SETTINGS_STORE_NAME)?;
 
     let id = store
         .add(
@@ -88,31 +88,20 @@ pub async fn store_ynab_token(database: &Database, token: YnabToken) -> anyhow::
                 .serialize(&Serializer::json_compatible())
                 .map_err(|e| anyhow::anyhow!("unable to serialize setting: {:#?}", e))?,
             Some(&JsValue::from_str(SETTINGS_KEY_TOKEN)),
-        )
-        .map_err(|e| anyhow::anyhow!("unable to store setting: {:#?}", e))?
-        .await
-        .map_err(|e| anyhow::anyhow!("unable to store setting: {:#?}", e))?;
+        )?
+        .await?;
     Ok(token.to_owned())
 }
 
-pub async fn get_ynab_token(database: &Database) -> anyhow::Result<Option<YnabToken>> {
-    let transaction = database
-        .transaction(&[SETTINGS_STORE_NAME], idb::TransactionMode::ReadOnly)
-        .map_err(|e| anyhow::anyhow!("unable to start transaction: {:#?}", e))?;
+pub async fn get_ynab_token(database: &Database) -> Result<Option<YnabToken>, DatabaseError> {
+    let transaction =
+        database.transaction(&[SETTINGS_STORE_NAME], idb::TransactionMode::ReadOnly)?;
 
-    let store = transaction
-        .object_store(SETTINGS_STORE_NAME)
-        .map_err(|e| anyhow::anyhow!("unable to get object store: {:#?}", e))?;
+    let store = transaction.object_store(SETTINGS_STORE_NAME)?;
 
-    let token = store
-        .get(JsValue::from_str(SETTINGS_KEY_TOKEN))
-        .map_err(|e| anyhow::anyhow!("unable to get stored token: {:#?}", e))?
-        .await
-        .map_err(|e| anyhow::anyhow!("unable to await stored token: {:#?}", e))?;
+    let token = store.get(JsValue::from_str(SETTINGS_KEY_TOKEN))?.await?;
 
-    transaction
-        .await
-        .map_err(|e| anyhow::anyhow!("unable to await transaction: {:#?}", e))?;
+    transaction.await?;
 
     // Deserialize the JsValue
 
@@ -137,24 +126,16 @@ pub async fn get_ynab_token(database: &Database) -> anyhow::Result<Option<YnabTo
 pub async fn replace_payees(
     database: &Database,
     data: &ResponseData,
-) -> anyhow::Result<(Vec<JsValue>, JsValue)> {
+) -> Result<(Vec<JsValue>, JsValue), DatabaseError> {
     debug!("adding {} payees", &data.payees.len());
-    let transaction = database
-        .transaction(
-            &[PAYEES_STORE_NAME, KNOWLEDGE_STORE_NAME],
-            idb::TransactionMode::ReadWrite,
-        )
-        .map_err(|e| anyhow::anyhow!("unable to start transaction: {:#?}", e))?;
+    let transaction = database.transaction(
+        &[PAYEES_STORE_NAME, KNOWLEDGE_STORE_NAME],
+        idb::TransactionMode::ReadWrite,
+    )?;
 
-    let store = transaction
-        .object_store(PAYEES_STORE_NAME)
-        .map_err(|e| anyhow::anyhow!("unable to get object store: {:#?}", e))?;
+    let store = transaction.object_store(PAYEES_STORE_NAME)?;
 
-    store
-        .clear()
-        .map_err(|e| anyhow::anyhow!("unable to clear the store: {:#?}", e))?
-        .await
-        .map_err(|e| anyhow::anyhow!("unable to clear the store: {:#?}", e))?;
+    store.clear()?.await?;
 
     let mut ids = Vec::new();
     for payee in data.payees.iter() {
@@ -165,24 +146,16 @@ pub async fn replace_payees(
                     .serialize(&Serializer::json_compatible())
                     .map_err(|e| anyhow::anyhow!("unable to serialize payee: {:#?}", e))?,
                 None,
-            )
-            .map_err(|e| anyhow::anyhow!("unable to store payee: {:#?}", e))?
-            .await
-            .map_err(|e| anyhow::anyhow!("unable to store payee: {:#?}", e))?;
+            )?
+            .await?;
 
         trace!("add payee: {:#?}", &payee);
         ids.push(id);
     }
 
-    let kstore = transaction
-        .object_store(KNOWLEDGE_STORE_NAME)
-        .map_err(|e| anyhow::anyhow!("unable to get object store: {:#?}", e))?;
+    let kstore = transaction.object_store(KNOWLEDGE_STORE_NAME)?;
 
-    kstore
-        .clear()
-        .map_err(|e| anyhow::anyhow!("unable to clear the store: {:#?}", e))?
-        .await
-        .map_err(|e| anyhow::anyhow!("unable to clear the store: {:#?}", e))?;
+    kstore.clear()?.await?;
 
     let knowledge = kstore
         .add(
@@ -191,41 +164,27 @@ pub async fn replace_payees(
                 .serialize(&Serializer::json_compatible())
                 .map_err(|e| anyhow::anyhow!("unable to serialize server_knowledge: {:#?}", e))?,
             Some(&JsValue::from_str(SERVER_KNOWLEDGE_KEY_PAYEES)),
-        )
-        .map_err(|e| anyhow::anyhow!("unable to store server_knowledge: {:#?}", e))?
-        .await
-        .map_err(|e| anyhow::anyhow!("unable to store server_knowledge: {:#?}", e))?;
+        )?
+        .await?;
 
     debug!("added server knowledge: {:#?}", &knowledge);
 
-    transaction
-        .commit()
-        .map_err(|e| anyhow::anyhow!("unable to commit transaction: {:#?}", e))?
-        .await
-        .map_err(|e| anyhow::anyhow!("unable to commit transaction: {:#?}", e))?;
+    transaction.commit()?.await?;
 
     debug!("added {:#?} payees", &ids.len());
 
     Ok((ids, knowledge))
 }
 
-pub async fn get_payees(database: &Database) -> anyhow::Result<(Vec<Payee>, u64)> {
-    let transaction = database
-        .transaction(
-            &[PAYEES_STORE_NAME, KNOWLEDGE_STORE_NAME],
-            idb::TransactionMode::ReadOnly,
-        )
-        .map_err(|e| anyhow::anyhow!("unable to start tranaction: {:#?}", e))?;
+pub async fn get_payees(database: &Database) -> Result<(Vec<Payee>, u64), DatabaseError> {
+    let transaction = database.transaction(
+        &[PAYEES_STORE_NAME, KNOWLEDGE_STORE_NAME],
+        idb::TransactionMode::ReadOnly,
+    )?;
 
-    let store = transaction
-        .object_store(PAYEES_STORE_NAME)
-        .map_err(|e| anyhow::anyhow!("unable to get object store: {:#?}", e))?;
+    let store = transaction.object_store(PAYEES_STORE_NAME)?;
 
-    let stored_payees = store
-        .get_all(None, None)
-        .map_err(|e| anyhow::anyhow!("unable to get stored payees: {:#?}", e))?
-        .await
-        .map_err(|e| anyhow::anyhow!("unable to get stored payees: {:#?}", e))?;
+    let stored_payees = store.get_all(None, None)?.await?;
 
     let stored_payees = stored_payees
         .into_iter()
@@ -233,18 +192,13 @@ pub async fn get_payees(database: &Database) -> anyhow::Result<(Vec<Payee>, u64)
             serde_wasm_bindgen::from_value(p.clone())
                 .map_err(|e| anyhow::anyhow!("unable to map payee: {:#?}", e))
         })
-        .collect::<anyhow::Result<Vec<Payee>>>()
-        .map_err(|e| anyhow::anyhow!("unable to get stored payees: {:#?}", e))?;
+        .collect::<anyhow::Result<Vec<Payee>>>()?;
 
-    let kstore = transaction
-        .object_store(KNOWLEDGE_STORE_NAME)
-        .map_err(|e| anyhow::anyhow!("unable to get object store: {:#?}", e))?;
+    let kstore = transaction.object_store(KNOWLEDGE_STORE_NAME)?;
 
     let knowledge = kstore
-        .get(JsValue::from_str(SERVER_KNOWLEDGE_KEY_PAYEES))
-        .map_err(|e| anyhow::anyhow!("unable to get stored payees: {:#?}", e))?
-        .await
-        .map_err(|e| anyhow::anyhow!("unable to await stored payees: {:#?}", e))?
+        .get(JsValue::from_str(SERVER_KNOWLEDGE_KEY_PAYEES))?
+        .await?
         .ok_or_else(|| anyhow::anyhow!("no server knowledge found in indexdb"))?;
 
     let knowledge = from_value::<u64>(knowledge).map_err(|e| {
@@ -254,9 +208,15 @@ pub async fn get_payees(database: &Database) -> anyhow::Result<(Vec<Payee>, u64)
         )
     })?;
 
-    transaction
-        .await
-        .map_err(|e| anyhow::anyhow!("unable to await transaction: {:#?}", e))?;
+    transaction.await?;
 
     Ok((stored_payees, knowledge))
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DatabaseError {
+    #[error(transparent)]
+    IndexDbError(#[from] idb::Error),
+    #[error(transparent)]
+    UnexpectedError(#[from] anyhow::Error),
 }
