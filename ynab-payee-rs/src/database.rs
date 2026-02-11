@@ -83,7 +83,7 @@ pub async fn store_ynab_token(
     let store = transaction.object_store(SETTINGS_STORE_NAME)?;
 
     let id = store
-        .add(
+        .put(
             &token
                 .serialize(&Serializer::json_compatible())
                 .map_err(|e| anyhow::anyhow!("unable to serialize setting: {:#?}", e))?,

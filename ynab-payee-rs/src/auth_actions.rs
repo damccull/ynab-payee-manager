@@ -3,7 +3,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use dioxus::{
     core::spawn,
-    prelude::debug,
+    prelude::{debug, error},
     signals::{ReadableExt, Signal, WritableExt},
 };
 use idb::Database;
@@ -54,10 +54,12 @@ impl AuthActions {
             match store_ynab_token(&db, token).await {
                 Ok(val) => thetoken.set(Some(val)),
                 Err(e) => {
+                    error!("Unable to save token to database: {}", &e);
                     status.set(AuthActionStatus::Error(anyhow::anyhow!(
                         "unable to store token: {:#?}",
                         e
                     )));
+                    thetoken.set(None);
                 }
             }
 
