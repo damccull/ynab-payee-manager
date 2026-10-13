@@ -113,8 +113,8 @@
           wrapGAppsHook3
           webkitgtk_4_1
           xdotool
-          xorg.libX11
-          xorg.libxcb
+          libX11
+          libxcb
           zlib
           sqlite
         ];
