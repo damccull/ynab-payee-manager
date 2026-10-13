@@ -122,12 +122,21 @@
         runtimeDeps = with pkgs; [
         ];
 
-        buildDeps =
+        # Deps shared by both nix build and devshell (linking libs, pkg-config, etc.)
+        commonDeps =
           with pkgs;
           [
             # llvmPackages_21.clang-unwrapped
             pkg-config
             rustPlatform.bindgenHook
+          ]
+          ++ dioxusDeps
+          ++ (if enableAndroid then androidDeps else [ ]);
+
+        # Deps only needed for nix build (not the devshell)
+        buildOnlyDeps =
+          with pkgs;
+          [
             (wasm-bindgen-cli.overrideAttrs (oldAttrs: rec {
               version = "0.2.108";
               src = fetchCrate {
@@ -142,9 +151,7 @@
                 hash = "sha256-iqQiWbsKlLBiJFeqIYiXo3cqxGLSjNM8SOWXGM9u43E=";
               };
             }))
-          ]
-          ++ dioxusDeps
-          ++ (if enableAndroid then androidDeps else [ ]);
+          ];
 
         devDeps =
           with pkgs;
@@ -201,7 +208,7 @@
               cargoLock.lockFile = ./Cargo.lock;
               buildFeatures = features;
               buildInputs = runtimeDeps;
-              nativeBuildInputs = buildDeps;
+              nativeBuildInputs = commonDeps ++ buildOnlyDeps;
               # Uncomment if your cargo tests require networking or otherwise
               # don't play nicely with the nix build sandbox:
               # doCheck = false;
@@ -236,7 +243,7 @@
 
             RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
             buildInputs = runtimeDeps;
-            nativeBuildInputs = buildDeps ++ devDeps ++ [ rustc ];
+            nativeBuildInputs = commonDeps ++ devDeps ++ [ rustc ];
           };
 
         rustTargets = [
