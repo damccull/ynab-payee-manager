@@ -3,7 +3,6 @@
     nixpkgs = {
       url = "github:nixos/nixpkgs/nixos-unstable";
     };
-    flake-utils.url = "github:numtide/flake-utils";
     rust-overlay.url = "github:oxalica/rust-overlay";
     dioxus-cli-gh = {
       url = "github:DioxusLabs/dioxus/v0.7.10";
@@ -15,300 +14,315 @@
     inputs@{
       self,
       nixpkgs,
-      flake-utils,
       ...
     }:
-    flake-utils.lib.eachDefaultSystem (
-      system:
-      let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ (import inputs.rust-overlay) ];
-          config = {
-            allowUnfreePredicate =
-              pkg:
-              builtins.elem (lib.getName pkg) (
-                [
-                ]
-                ++ (
-                  if enableAndroid then
-                    [
-                      "android-sdk-tools"
-                      "android-sdk-cmdline-tools"
-                    ]
-                  else
-                    [ ]
-                )
-              );
-            android_sdk.accept_license = true;
-          };
-        };
+    let
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "aarch64-darwin"
+      ];
+      eachSystem = nixpkgs.lib.genAttrs systems;
 
-        lib = nixpkgs.lib;
-
-        enableAndroid = false;
-
-        androidSdk =
-          let
-            androidComposition = pkgs.androidenv.composeAndroidPackages {
-              cmdLineToolsVersion = "13.0";
-              # INFO: toolsVersion is unused because the tools package is deprecated
-              # toolsVersion = "26.1.1";
-              platformToolsVersion = "35.0.2";
-              buildToolsVersions = [
-                "34.0.0"
-                "35.0.0"
-              ];
-              includeEmulator = true;
-              emulatorVersion = "35.1.4";
-              platformVersions = [
-                "33"
-              ];
-              includeSources = false;
-              includeSystemImages = true;
-              systemImageTypes = [ "google_apis_playstore" ];
-              abiVersions = [
-                "x86_64"
-                # "armeabi-v7a"
-                # "arm64-v8a"
-              ];
-              cmakeVersions = [ "3.6.4111459" ];
-              includeNDK = true;
-              ndkVersions = [ "27.0.12077973" ];
-              useGoogleAPIs = true;
-              useGoogleTVAddOns = false;
-              includeExtras = [
-                "extras;google;gcm"
-              ];
+      perSystem =
+        system:
+        let
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ (import inputs.rust-overlay) ];
+            config = {
+              allowUnfreePredicate =
+                pkg:
+                builtins.elem (lib.getName pkg) (
+                  [
+                  ]
+                  ++ (
+                    if enableAndroid then
+                      [
+                        "android-sdk-tools"
+                        "android-sdk-cmdline-tools"
+                      ]
+                    else
+                      [ ]
+                  )
+                );
+              android_sdk.accept_license = true;
             };
-          in
-          androidComposition.androidsdk;
-
-        androidDeps = with pkgs; [
-          androidSdk
-          openjdk
-        ];
-
-        dioxusDeps = with pkgs; [
-          atkmm
-          cairo
-          fontconfig
-          fribidi
-          gdk-pixbuf
-          glib
-          glib-networking
-          gtk3
-          gsettings-desktop-schemas # Doesn't fix appimage bundle issue
-          harfbuzz
-          freetype
-          libdrm
-          libGL
-          libgpg-error
-          libsoup_3
-          mesa
-          openssl
-          wrapGAppsHook3
-          webkitgtk_4_1
-          xdotool
-          libX11
-          libxcb
-          zlib
-          sqlite
-        ];
-
-        runtimeDeps = with pkgs; [
-        ];
-
-        surrealdb-bin = pkgs.stdenv.mkDerivation rec {
-          pname = "surrealdb";
-          version = "3.3.0";
-          src = pkgs.fetchurl {
-            url = "https://github.com/surrealdb/surrealdb/releases/download/v${version}/surreal-v${version}.linux-amd64.tgz";
-            hash = "sha256-RK6rVl9+fjnS0L8Fg8iq5ki6vJE3PHCyZYKI2Vu7zVU=";
           };
-          sourceRoot = ".";
-          nativeBuildInputs = [ pkgs.autoPatchelfHook ];
-          buildInputs = [
-            pkgs.stdenv.cc.cc.lib
-            pkgs.openssl
+
+          lib = nixpkgs.lib;
+
+          enableAndroid = false;
+
+          androidSdk =
+            let
+              androidComposition = pkgs.androidenv.composeAndroidPackages {
+                cmdLineToolsVersion = "13.0";
+                # INFO: toolsVersion is unused because the tools package is deprecated
+                # toolsVersion = "26.1.1";
+                platformToolsVersion = "35.0.2";
+                buildToolsVersions = [
+                  "34.0.0"
+                  "35.0.0"
+                ];
+                includeEmulator = true;
+                emulatorVersion = "35.1.4";
+                platformVersions = [
+                  "33"
+                ];
+                includeSources = false;
+                includeSystemImages = true;
+                systemImageTypes = [ "google_apis_playstore" ];
+                abiVersions = [
+                  "x86_64"
+                  # "armeabi-v7a"
+                  # "arm64-v8a"
+                ];
+                cmakeVersions = [ "3.6.4111459" ];
+                includeNDK = true;
+                ndkVersions = [ "27.0.12077973" ];
+                useGoogleAPIs = true;
+                useGoogleTVAddOns = false;
+                includeExtras = [
+                  "extras;google;gcm"
+                ];
+              };
+            in
+            androidComposition.androidsdk;
+
+          androidDeps = with pkgs; [
+            androidSdk
+            openjdk
           ];
-          installPhase = ''
-            mkdir -p $out/bin
-            cp surreal $out/bin/
-            chmod +x $out/bin/surreal
-          '';
-        };
 
-        # Deps shared by both nix build and devshell (linking libs, pkg-config, etc.)
-        commonDeps =
-          with pkgs;
-          [
-            # llvmPackages_21.clang-unwrapped
-            pkg-config
-            rustPlatform.bindgenHook
-          ]
-          ++ dioxusDeps
-          ++ (if enableAndroid then androidDeps else [ ]);
+          dioxusDeps = with pkgs; [
+            atkmm
+            cairo
+            fontconfig
+            fribidi
+            gdk-pixbuf
+            glib
+            glib-networking
+            gtk3
+            gsettings-desktop-schemas # Doesn't fix appimage bundle issue
+            harfbuzz
+            freetype
+            libdrm
+            libGL
+            libgpg-error
+            libsoup_3
+            mesa
+            openssl
+            wrapGAppsHook3
+            webkitgtk_4_1
+            xdotool
+            libX11
+            libxcb
+            zlib
+            sqlite
+          ];
 
-        # Deps only needed for nix build (not the devshell)
-        buildOnlyDeps = with pkgs; [
-          (wasm-bindgen-cli.overrideAttrs (oldAttrs: rec {
-            version = "0.2.108";
-            src = fetchCrate {
-              pname = "wasm-bindgen-cli";
-              version = version;
-              hash = "sha256-UsuxILm1G6PkmVw0I/JF12CRltAfCJQFOaT4hFwvR8E=";
+          runtimeDeps = with pkgs; [
+          ];
+
+          surrealdb-bin = pkgs.stdenv.mkDerivation rec {
+            pname = "surrealdb";
+            version = "3.3.0";
+            src = pkgs.fetchurl {
+              url = "https://github.com/surrealdb/surrealdb/releases/download/v${version}/surreal-v${version}.linux-amd64.tgz";
+              hash = "sha256-RK6rVl9+fjnS0L8Fg8iq5ki6vJE3PHCyZYKI2Vu7zVU=";
             };
+            sourceRoot = ".";
+            nativeBuildInputs = [ pkgs.autoPatchelfHook ];
+            buildInputs = [
+              pkgs.stdenv.cc.cc.lib
+              pkgs.openssl
+            ];
+            installPhase = ''
+              mkdir -p $out/bin
+              cp surreal $out/bin/
+              chmod +x $out/bin/surreal
+            '';
+          };
 
-            cargoDeps = rustPlatform.fetchCargoVendor {
-              inherit src;
-              inherit (src) pname version;
-              hash = "sha256-iqQiWbsKlLBiJFeqIYiXo3cqxGLSjNM8SOWXGM9u43E=";
-            };
-          }))
-        ];
+          # Deps shared by both nix build and devshell (linking libs, pkg-config, etc.)
+          commonDeps =
+            with pkgs;
+            [
+              # llvmPackages_21.clang-unwrapped
+              pkg-config
+              rustPlatform.bindgenHook
+            ]
+            ++ dioxusDeps
+            ++ (if enableAndroid then androidDeps else [ ]);
 
-        devDeps =
-          with pkgs;
-          [
-            # Libraries and programs needed for dev work; included in dev shell
-            # NOT included in the nix build operation
-            bacon
-            bunyan-rs
-            cargo-deny
-            cargo-edit
-            cargo-expand
-            cargo-msrv
-            cargo-nextest
-            cargo-watch
-            (cargo-whatfeatures.overrideAttrs (oldAttrs: rec {
-              version = "0.9.13";
+          # Deps only needed for nix build (not the devshell)
+          buildOnlyDeps = with pkgs; [
+            (wasm-bindgen-cli.overrideAttrs (oldAttrs: rec {
+              version = "0.2.108";
               src = fetchCrate {
-                pname = "cargo-whatfeatures";
-                version = "${version}";
-                hash = "sha256-Nbyr7u47c6nImzYJvPVLfbqgDvzyXqR1C1tOLximuHU=";
+                pname = "wasm-bindgen-cli";
+                version = version;
+                hash = "sha256-UsuxILm1G6PkmVw0I/JF12CRltAfCJQFOaT4hFwvR8E=";
               };
 
               cargoDeps = rustPlatform.fetchCargoVendor {
                 inherit src;
                 inherit (src) pname version;
-                hash = "sha256-p95aYXsZM9xwP/OHEFwq4vRiXoO1n1M0X3TNbleH+Zw=";
+                hash = "sha256-iqQiWbsKlLBiJFeqIYiXo3cqxGLSjNM8SOWXGM9u43E=";
               };
             }))
-            fish
-            gdb
-            just
-            nushell
-            panamax
-            tailwindcss
-            zellij
-          ]
-          ++ [
-            surrealdb-bin
-            inputs.dioxus-cli-gh.packages.${system}.dioxus-cli
           ];
 
-        cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
-        msrv = cargoToml.package.rust-version;
+          devDeps =
+            with pkgs;
+            [
+              # Libraries and programs needed for dev work; included in dev shell
+              # NOT included in the nix build operation
+              bacon
+              bunyan-rs
+              cargo-deny
+              cargo-edit
+              cargo-expand
+              cargo-msrv
+              cargo-nextest
+              cargo-watch
+              (cargo-whatfeatures.overrideAttrs (oldAttrs: rec {
+                version = "0.9.13";
+                src = fetchCrate {
+                  pname = "cargo-whatfeatures";
+                  version = "${version}";
+                  hash = "sha256-Nbyr7u47c6nImzYJvPVLfbqgDvzyXqR1C1tOLximuHU=";
+                };
 
-        rustPackage =
-          features:
-          (pkgs.makeRustPlatform {
-            cargo = pkgs.rust-bin.stable.latest.minimal;
-            rustc = pkgs.rust-bin.stable.latest.minimal;
-          }).buildRustPackage
-            {
-              inherit (cargoToml.package) name version;
-              src = ./.;
-              cargoLock.lockFile = ./Cargo.lock;
-              buildFeatures = features;
+                cargoDeps = rustPlatform.fetchCargoVendor {
+                  inherit src;
+                  inherit (src) pname version;
+                  hash = "sha256-p95aYXsZM9xwP/OHEFwq4vRiXoO1n1M0X3TNbleH+Zw=";
+                };
+              }))
+              fish
+              gdb
+              just
+              nushell
+              panamax
+              tailwindcss
+              zellij
+            ]
+            ++ [
+              surrealdb-bin
+              inputs.dioxus-cli-gh.packages.${system}.dioxus-cli
+            ];
+
+          cargoToml = builtins.fromTOML (builtins.readFile ./ynab-payee-rs/Cargo.toml);
+          msrv = cargoToml.package.rust-version or "1.80.0";
+
+          rustPackage =
+            features:
+            (pkgs.makeRustPlatform {
+              cargo = pkgs.rust-bin.stable.latest.minimal;
+              rustc = pkgs.rust-bin.stable.latest.minimal;
+            }).buildRustPackage
+              {
+                inherit (cargoToml.package) name version;
+                src = ./ynab-payee-rs;
+                cargoLock.lockFile = ./ynab-payee-rs/Cargo.lock;
+                buildFeatures = features;
+                buildInputs = runtimeDeps;
+                nativeBuildInputs = commonDeps ++ buildOnlyDeps;
+                # Uncomment if your cargo tests require networking or otherwise
+                # don't play nicely with the nix build sandbox:
+                # doCheck = false;
+              };
+
+          ldpath =
+            with pkgs;
+            [
+            ]
+            ++ dioxusDeps;
+
+          mkDevShell =
+            rustc:
+            pkgs.mkShell.override { stdenv = pkgs.clangStdenv; } {
+              shellHook = ''
+                export SHELL="${pkgs.fish}/bin/fish"
+
+                # 1. [[ $- == *i* ]] checks if the CURRENT execution shell context is interactive.
+                # 2. [ -z "$i" ] guards against some edge-case nested script evaluation loops.
+                if [[ $- == *i* ]] && [ -z "$i" ]; then
+                  export i=1
+                  exec $SHELL -i
+                fi
+              '';
+              LD_LIBRARY_PATH = lib.makeLibraryPath ldpath;
+
+              # Override gcc with clang. Must use unwrapped version because the wrapper does not
+              # allow passing a target as an argument, breaking wasm compiles
+              # CC = "${pkgs.llvmPackages_21.clang-unwrapped}/bin/clang";
+              # CXX = "${pkgs.llvmPackages_21.clang-unwrapped}/bin/clang++";
+
+              ANDROID_HOME = if enableAndroid then "${androidSdk}/libexec/android-sdk" else "";
+              ANDROID_NDK_HOME = if enableAndroid then "${androidSdk}/libexec/android-sdk/ndk-bundle" else "";
+
+              GIO_MODULE_DIR = "${pkgs.glib-networking}/lib/gio/modules/";
+
+              RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
               buildInputs = runtimeDeps;
-              nativeBuildInputs = commonDeps ++ buildOnlyDeps;
-              # Uncomment if your cargo tests require networking or otherwise
-              # don't play nicely with the nix build sandbox:
-              # doCheck = false;
+              nativeBuildInputs = commonDeps ++ devDeps ++ [ rustc ];
             };
 
-        ldpath =
-          with pkgs;
-          [
-          ]
-          ++ dioxusDeps;
+          rustTargets = [
+            "x86_64-unknown-linux-gnu"
+            "x86_64-linux-android"
+            "aarch64-linux-android"
+            "wasm32-unknown-unknown"
+          ];
 
-        mkDevShell =
-          rustc:
-          pkgs.mkShell.override { stdenv = pkgs.clangStdenv; } {
-            shellHook = ''
-              # Override the path to ensure clang is before gcc
-              # export PATH=${pkgs.llvmPackages_21.clang-unwrapped}/bin:$PATH
-              # TODO: figure out if it's possible to remove this or allow a user's preferred shell
-              exec env SHELL=${pkgs.fish}/bin/fish zellij --layout ./zellij_layout.kdl
-            '';
-            LD_LIBRARY_PATH = lib.makeLibraryPath ldpath;
+          rustExtensions = [
+            "rust-analyzer"
+            "rust-src"
+          ];
+        in
+        rec {
 
-            # Override gcc with clang. Must use unwrapped version because the wrapper does not
-            # allow passing a target as an argument, breaking wasm compiles
-            # CC = "${pkgs.llvmPackages_21.clang-unwrapped}/bin/clang";
-            # CXX = "${pkgs.llvmPackages_21.clang-unwrapped}/bin/clang++";
+          packages.default = packages.base;
+          devShells.default = devShells.stable;
 
-            ANDROID_HOME = if enableAndroid then "${androidSdk}/libexec/android-sdk" else "";
-            ANDROID_NDK_HOME = if enableAndroid then "${androidSdk}/libexec/android-sdk/ndk-bundle" else "";
+          packages.base = (rustPackage "");
+          packages.bunyan = (rustPackage "bunyan");
+          # packages.tokio-console = (rustPackage "tokio-console");
 
-            GIO_MODULE_DIR = "${pkgs.glib-networking}/lib/gio/modules/";
-
-            RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
-            buildInputs = runtimeDeps;
-            nativeBuildInputs = commonDeps ++ devDeps ++ [ rustc ];
-          };
-
-        rustTargets = [
-          "x86_64-unknown-linux-gnu"
-          "x86_64-linux-android"
-          "aarch64-linux-android"
-          "wasm32-unknown-unknown"
-        ];
-
-        rustExtensions = [
-          "rust-analyzer"
-          "rust-src"
-        ];
-      in
-      rec {
-
-        packages.default = packages.base;
-        devShells.default = devShells.stable;
-
-        packages.base = (rustPackage "");
-        packages.bunyan = (rustPackage "bunyan");
-        # packages.tokio-console = (rustPackage "tokio-console");
-
-        devShells.nightly = (
-          mkDevShell (
-            pkgs.rust-bin.selectLatestNightlyWith (
-              toolchain:
-              toolchain.default.override {
+          devShells.nightly = (
+            mkDevShell (
+              pkgs.rust-bin.selectLatestNightlyWith (
+                toolchain:
+                toolchain.default.override {
+                  extensions = rustExtensions;
+                  targets = rustTargets;
+                }
+              )
+            )
+          );
+          devShells.stable = (
+            mkDevShell (
+              pkgs.rust-bin.stable.latest.default.override {
                 extensions = rustExtensions;
                 targets = rustTargets;
               }
             )
-          )
-        );
-        devShells.stable = (
-          mkDevShell (
-            pkgs.rust-bin.stable.latest.default.override {
-              extensions = rustExtensions;
-              targets = rustTargets;
-            }
-          )
-        );
-        devShells.msrv = (
-          mkDevShell (
-            pkgs.rust-bin.stable.${msrv}.default.override {
-              extensions = rustExtensions;
-              targets = rustTargets;
-            }
-          )
-        );
-      }
-    );
+          );
+          devShells.msrv = (
+            mkDevShell (
+              pkgs.rust-bin.stable.${msrv}.default.override {
+                extensions = rustExtensions;
+                targets = rustTargets;
+              }
+            )
+          );
+        };
+    in
+    {
+      packages = eachSystem (system: (perSystem system).packages);
+      devShells = eachSystem (system: (perSystem system).devShells);
+    };
 }
