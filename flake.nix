@@ -5,10 +5,8 @@
     };
     flake-utils.url = "github:numtide/flake-utils";
     rust-overlay.url = "github:oxalica/rust-overlay";
-    surrealdb-gh.url = "github:surrealdb/surrealdb/v2.3.6";
-    # dioxus-cli-gh.url = "github:DioxusLabs/dioxus/v0.7.2";
     dioxus-cli-gh = {
-      url = "github:DioxusLabs/dioxus/v0.7.2";
+      url = "github:DioxusLabs/dioxus/v0.7.10";
       inputs.nixpkgs.follows = "nixpkgs"; # Use same nixpkgs
       inputs.rust-overlay.follows = "rust-overlay"; # Crucial: inherit the overlay
     };
@@ -31,7 +29,6 @@
               pkg:
               builtins.elem (lib.getName pkg) (
                 [
-                  "surrealdb"
                 ]
                 ++ (
                   if enableAndroid then
@@ -122,6 +119,26 @@
         runtimeDeps = with pkgs; [
         ];
 
+        surrealdb-bin = pkgs.stdenv.mkDerivation rec {
+          pname = "surrealdb";
+          version = "3.3.0";
+          src = pkgs.fetchurl {
+            url = "https://github.com/surrealdb/surrealdb/releases/download/v${version}/surreal-v${version}.linux-amd64.tgz";
+            hash = "sha256-RK6rVl9+fjnS0L8Fg8iq5ki6vJE3PHCyZYKI2Vu7zVU=";
+          };
+          sourceRoot = ".";
+          nativeBuildInputs = [ pkgs.autoPatchelfHook ];
+          buildInputs = [
+            pkgs.stdenv.cc.cc.lib
+            pkgs.openssl
+          ];
+          installPhase = ''
+            mkdir -p $out/bin
+            cp surreal $out/bin/
+            chmod +x $out/bin/surreal
+          '';
+        };
+
         # Deps shared by both nix build and devshell (linking libs, pkg-config, etc.)
         commonDeps =
           with pkgs;
@@ -134,24 +151,22 @@
           ++ (if enableAndroid then androidDeps else [ ]);
 
         # Deps only needed for nix build (not the devshell)
-        buildOnlyDeps =
-          with pkgs;
-          [
-            (wasm-bindgen-cli.overrideAttrs (oldAttrs: rec {
-              version = "0.2.108";
-              src = fetchCrate {
-                pname = "wasm-bindgen-cli";
-                version = version;
-                hash = "sha256-UsuxILm1G6PkmVw0I/JF12CRltAfCJQFOaT4hFwvR8E=";
-              };
+        buildOnlyDeps = with pkgs; [
+          (wasm-bindgen-cli.overrideAttrs (oldAttrs: rec {
+            version = "0.2.108";
+            src = fetchCrate {
+              pname = "wasm-bindgen-cli";
+              version = version;
+              hash = "sha256-UsuxILm1G6PkmVw0I/JF12CRltAfCJQFOaT4hFwvR8E=";
+            };
 
-              cargoDeps = rustPlatform.fetchCargoVendor {
-                inherit src;
-                inherit (src) pname version;
-                hash = "sha256-iqQiWbsKlLBiJFeqIYiXo3cqxGLSjNM8SOWXGM9u43E=";
-              };
-            }))
-          ];
+            cargoDeps = rustPlatform.fetchCargoVendor {
+              inherit src;
+              inherit (src) pname version;
+              hash = "sha256-iqQiWbsKlLBiJFeqIYiXo3cqxGLSjNM8SOWXGM9u43E=";
+            };
+          }))
+        ];
 
         devDeps =
           with pkgs;
@@ -189,7 +204,7 @@
             zellij
           ]
           ++ [
-            inputs.surrealdb-gh.packages.${system}.default
+            surrealdb-bin
             inputs.dioxus-cli-gh.packages.${system}.dioxus-cli
           ];
 

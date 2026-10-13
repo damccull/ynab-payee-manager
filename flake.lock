@@ -2,22 +2,22 @@
   "nodes": {
     "crane": {
       "locked": {
-        "lastModified": 1734808813,
-        "narHash": "sha256-3aH/0Y6ajIlfy7j52FGZ+s4icVX0oHhqBzRdlOeztqg=",
+        "lastModified": 1791754810,
+        "narHash": "sha256-cN0Mgk+sQtCJcGWs9H4M0CnLRAuC4I8aCwiBTcBJs6E=",
         "owner": "ipetkov",
         "repo": "crane",
-        "rev": "72e2d02dbac80c8c86bf6bf3e785536acf8ee926",
+        "rev": "bd63bf1d0a0f6dcacd7549c714a671ee63b0db6a",
         "type": "github"
       },
       "original": {
         "owner": "ipetkov",
-        "ref": "v0.20.0",
         "repo": "crane",
         "type": "github"
       }
     },
     "dioxus-cli-gh": {
       "inputs": {
+        "crane": "crane",
         "flake-parts": "flake-parts",
         "nixpkgs": [
           "nixpkgs"
@@ -28,55 +28,17 @@
         "systems": "systems"
       },
       "locked": {
-        "lastModified": 1764901575,
-        "narHash": "sha256-m4KJ3mchKlhOR45RVf0aGDqRPfRMId5HFnhauw+GHAM=",
+        "lastModified": 1785450811,
+        "narHash": "sha256-89hiXoe3NPTRdSBOE0v3LEn+ytSU+xhT1hfVN8291+M=",
         "owner": "DioxusLabs",
         "repo": "dioxus",
-        "rev": "8f8b58ea80ba0ec8057807bcd58fb609f7a5f2b1",
+        "rev": "57d6794ad60b949e5bd8aa282f6f8c3dc97a365e",
         "type": "github"
       },
       "original": {
         "owner": "DioxusLabs",
-        "ref": "v0.7.2",
+        "ref": "v0.7.10",
         "repo": "dioxus",
-        "type": "github"
-      }
-    },
-    "fenix": {
-      "inputs": {
-        "nixpkgs": [
-          "surrealdb-gh",
-          "nixpkgs"
-        ],
-        "rust-analyzer-src": "rust-analyzer-src"
-      },
-      "locked": {
-        "lastModified": 1737354756,
-        "narHash": "sha256-CCXoqOoXRJGsgRkyrCJOx+m+ukZ1i5dVRP/g8o4MbW8=",
-        "owner": "nix-community",
-        "repo": "fenix",
-        "rev": "5edc630f5b1cae39beea96b392d0ec699e1e9d31",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nix-community",
-        "repo": "fenix",
-        "type": "github"
-      }
-    },
-    "flake-compat": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1733328505,
-        "narHash": "sha256-NeCCThCEP3eCl2l/+27kNNK7QrwZB1IJCrXfrbv5oqU=",
-        "owner": "edolstra",
-        "repo": "flake-compat",
-        "rev": "ff81ac966bb2cae68946d5ed5fc4994f96d0ffec",
-        "type": "github"
-      },
-      "original": {
-        "owner": "edolstra",
-        "repo": "flake-compat",
         "type": "github"
       }
     },
@@ -112,22 +74,6 @@
       },
       "original": {
         "owner": "numtide",
-        "repo": "flake-utils",
-        "type": "github"
-      }
-    },
-    "flake-utils_2": {
-      "locked": {
-        "lastModified": 1652776076,
-        "narHash": "sha256-gzTw/v1vj4dOVbpBSJX4J0DwUR6LIyXo7/SuuTJp1kM=",
-        "owner": "numtide",
-        "repo": "flake-utils",
-        "rev": "04c1b180862888302ddfb2e3ad9eaa63afc60cf8",
-        "type": "github"
-      },
-      "original": {
-        "owner": "numtide",
-        "ref": "v1.0.0",
         "repo": "flake-utils",
         "type": "github"
       }
@@ -179,46 +125,12 @@
         "type": "github"
       }
     },
-    "nixpkgs_3": {
-      "locked": {
-        "lastModified": 1737362405,
-        "narHash": "sha256-IT0B8bzp0JHYlMZ62qFdwKrj9zxdn3AEAsByXFWMcY4=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "6b90f6de986555ac39fc69c438d1192a397bf686",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NixOS",
-        "ref": "nixos-24.11-small",
-        "repo": "nixpkgs",
-        "type": "github"
-      }
-    },
     "root": {
       "inputs": {
         "dioxus-cli-gh": "dioxus-cli-gh",
         "flake-utils": "flake-utils",
         "nixpkgs": "nixpkgs",
-        "rust-overlay": "rust-overlay",
-        "surrealdb-gh": "surrealdb-gh"
-      }
-    },
-    "rust-analyzer-src": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1737215993,
-        "narHash": "sha256-W8xioeq+h9dzGvtXPlQAn2nXtgNDN6C8uA1/9F2JP5I=",
-        "owner": "rust-lang",
-        "repo": "rust-analyzer",
-        "rev": "248bd511aee2c1c1cb2d5314649521d6d93b854a",
-        "type": "github"
-      },
-      "original": {
-        "owner": "rust-lang",
-        "ref": "nightly",
-        "repo": "rust-analyzer",
-        "type": "github"
+        "rust-overlay": "rust-overlay"
       }
     },
     "rust-overlay": {
@@ -236,29 +148,6 @@
       "original": {
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "type": "github"
-      }
-    },
-    "surrealdb-gh": {
-      "inputs": {
-        "crane": "crane",
-        "fenix": "fenix",
-        "flake-compat": "flake-compat",
-        "flake-utils": "flake-utils_2",
-        "nixpkgs": "nixpkgs_3"
-      },
-      "locked": {
-        "lastModified": 1750856514,
-        "narHash": "sha256-w+kooywwSX4urJkM17+YPbXQ8C/NF9jw0rEJFlYgNYQ=",
-        "owner": "surrealdb",
-        "repo": "surrealdb",
-        "rev": "7f4cfd44e9ef53e6c59980e35ddd7f65f4a7e536",
-        "type": "github"
-      },
-      "original": {
-        "owner": "surrealdb",
-        "ref": "v2.3.6",
-        "repo": "surrealdb",
         "type": "github"
       }
     },
