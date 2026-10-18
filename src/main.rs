@@ -237,6 +237,24 @@ fn Payees() -> Element {
         });
     };
 
+    let payees_cache = PAYEES_CACHE.read();
+    let display_payees: Vec<_> = payees_cache
+        .iter()
+        .filter(|payee| {
+            payee
+                .transfer_account_id
+                .as_deref()
+                .is_none_or(|id| id.trim().is_empty())
+        })
+        .collect();
+    let total_payees = payees_cache.len();
+    let hidden_transfer_payees = total_payees - display_payees.len();
+    let hidden_note = match hidden_transfer_payees {
+        0 => String::new(),
+        1 => " (1 transfer account payee hidden)".to_string(),
+        n => format!(" ({n} transfer account payees hidden)"),
+    };
+
     rsx! {
         div {
             class: "payees-header",
@@ -250,7 +268,7 @@ fn Payees() -> Element {
                 p { style: "color: red;", "Error: {err}" }
             }
         }
-        p { "Total Payees: {PAYEES_CACHE.read().len()} | Server Knowledge: {PAYEES_KNOWLEDGE.read()}" }
+        p { "Total Payees: {total_payees}{hidden_note} | Server Knowledge: {PAYEES_KNOWLEDGE.read()}" }
 
         if *is_loading.read() && PAYEES_CACHE.read().is_empty() {
             p { "Loading payees from YNAB..." }
@@ -262,7 +280,7 @@ fn Payees() -> Element {
                     th { "Transfer Account ID" }
                     th { "Deleted" }
                 }
-                for payee in PAYEES_CACHE.iter() {
+                for payee in display_payees {
                     tr {
                         td {"data-fieldname": "id", "{payee.id}"},
                         td {"data-fieldname": "name", "{payee.name}"},
