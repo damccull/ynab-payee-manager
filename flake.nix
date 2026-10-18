@@ -3,11 +3,15 @@
     nixpkgs = {
       url = "github:nixos/nixpkgs/nixos-unstable";
     };
-    rust-overlay.url = "github:oxalica/rust-overlay";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     dioxus-cli-gh = {
       url = "github:DioxusLabs/dioxus/v0.7.10";
       inputs.nixpkgs.follows = "nixpkgs"; # Use same nixpkgs
       inputs.rust-overlay.follows = "rust-overlay"; # Crucial: inherit the overlay
+      inputs.flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
     };
   };
   outputs =
@@ -145,6 +149,44 @@
             '';
           };
 
+          wasm-bindgen-cli-bin =
+            let
+              targets = {
+                "x86_64-linux" = {
+                  target = "x86_64-unknown-linux-musl";
+                  sha256 = "82d12bb940e2d4e72e0d5605387fc1b8ca179044e012b620f0ce4e7440e8320e";
+                };
+                "aarch64-linux" = {
+                  target = "aarch64-unknown-linux-musl";
+                  sha256 = "2ed4351c35dd9440308bbb02767d47ea278efe851a52465300f3c94f5b6c2a87";
+                };
+                "aarch64-darwin" = {
+                  target = "aarch64-apple-darwin";
+                  sha256 = "81d4a23d56b3c3eb8187658329116d50e0b228a93b343825fb71f70179051cd1";
+                };
+                "x86_64-darwin" = {
+                  target = "x86_64-apple-darwin";
+                  sha256 = "7e028879a68ec53dae14048b55cc5215f6df75b17a9c1426fac8fa086d3202fd";
+                };
+              };
+              targetInfo = targets.${system} or (throw "Unsupported system for wasm-bindgen-cli: ${system}");
+            in
+            pkgs.stdenv.mkDerivation rec {
+              pname = "wasm-bindgen-cli";
+              version = "0.2.129";
+              src = pkgs.fetchurl {
+                url = "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${version}/wasm-bindgen-${version}-${targetInfo.target}.tar.gz";
+                inherit (targetInfo) sha256;
+              };
+              sourceRoot = ".";
+              installPhase = ''
+                mkdir -p $out/bin
+                find . -type f -name wasm-bindgen -exec cp {} $out/bin/ \;
+                find . -type f -name wasm-bindgen-test-runner -exec cp {} $out/bin/ \;
+                chmod +x $out/bin/*
+              '';
+            };
+
           # Deps shared by both nix build and devshell (linking libs, pkg-config, etc.)
           commonDeps =
             with pkgs;
@@ -152,27 +194,13 @@
               # llvmPackages_21.clang-unwrapped
               pkg-config
               rustPlatform.bindgenHook
+              wasm-bindgen-cli-bin
             ]
             ++ dioxusDeps
             ++ (if enableAndroid then androidDeps else [ ]);
 
           # Deps only needed for nix build (not the devshell)
-          buildOnlyDeps = with pkgs; [
-            (wasm-bindgen-cli.overrideAttrs (oldAttrs: rec {
-              version = "0.2.108";
-              src = fetchCrate {
-                pname = "wasm-bindgen-cli";
-                version = version;
-                hash = "sha256-UsuxILm1G6PkmVw0I/JF12CRltAfCJQFOaT4hFwvR8E=";
-              };
-
-              cargoDeps = rustPlatform.fetchCargoVendor {
-                inherit src;
-                inherit (src) pname version;
-                hash = "sha256-iqQiWbsKlLBiJFeqIYiXo3cqxGLSjNM8SOWXGM9u43E=";
-              };
-            }))
-          ];
+          buildOnlyDeps = [ ];
 
           devDeps =
             with pkgs;
@@ -201,6 +229,7 @@
                   hash = "sha256-p95aYXsZM9xwP/OHEFwq4vRiXoO1n1M0X3TNbleH+Zw=";
                 };
               }))
+              esbuild
               fish
               gdb
               just
@@ -245,6 +274,9 @@
             rustc:
             pkgs.mkShell.override { stdenv = pkgs.clangStdenv; } {
               shellHook = ''
+                # Prevent argument list too long when compiling host build scripts
+                unset NIX_LDFLAGS NIX_LDFLAGS_FOR_BUILD
+
                 export SHELL="${pkgs.fish}/bin/fish"
 
                 # 1. [[ $- == *i* ]] checks if the CURRENT execution shell context is interactive.
@@ -256,10 +288,12 @@
               '';
               LD_LIBRARY_PATH = lib.makeLibraryPath ldpath;
 
-              # Override gcc with clang. Must use unwrapped version because the wrapper does not
-              # allow passing a target as an argument, breaking wasm compiles
-              # CC = "${pkgs.llvmPackages_21.clang-unwrapped}/bin/clang";
-              # CXX = "${pkgs.llvmPackages_21.clang-unwrapped}/bin/clang++";
+              # WASM cross-compilation needs the unwrapped clang: the Nix wrapper
+              # rejects --target flags that C build scripts may pass. Native
+              # targets get the wrapped compiler from the stdenv.
+              CC_wasm32_unknown_unknown = "${pkgs.llvmPackages_21.clang-unwrapped}/bin/clang";
+              CXX_wasm32_unknown_unknown = "${pkgs.llvmPackages_21.clang-unwrapped}/bin/clang++";
+              AR_wasm32_unknown_unknown = "${pkgs.llvmPackages_21.llvm}/bin/llvm-ar";
 
               ANDROID_HOME = if enableAndroid then "${androidSdk}/libexec/android-sdk" else "";
               ANDROID_NDK_HOME = if enableAndroid then "${androidSdk}/libexec/android-sdk/ndk-bundle" else "";
