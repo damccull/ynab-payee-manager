@@ -266,7 +266,24 @@ tr:last-child td {
 }
 
 /* Specific Field Cell Styling */
-td[data-fieldname="id"],
+.payee-name-container {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.payee-name {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.payee-id-subtext {
+    font-style: italic;
+    font-size: 11px;
+    color: #8b949e;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
 td[data-fieldname="transfer_acct_id"] {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     font-size: 12px;

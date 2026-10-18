@@ -287,7 +287,6 @@ fn Payees() -> Element {
                 table {
                     thead {
                         tr {
-                            th { "ID" }
                             th { "Name" }
                             th { "Transfer Account ID" }
                             th { "Deleted" }
@@ -296,8 +295,18 @@ fn Payees() -> Element {
                     tbody {
                         for payee in display_payees {
                             tr {
-                                td {"data-fieldname": "id", "{payee.id}"},
-                                td {"data-fieldname": "name", "{payee.name}"},
+                                td {
+                                    "data-fieldname": "name",
+                                    div {
+                                        class: "payee-name-container",
+                                        span { class: "payee-name", "{payee.name}" }
+                                        span {
+                                            class: "payee-id-subtext",
+                                            "data-fieldname": "id",
+                                            "{payee.id}"
+                                        }
+                                    }
+                                },
                                 td {"data-fieldname": "transfer_acct_id", "{payee.transfer_account_id.as_deref().unwrap_or(\"None\")}"},
                                 td {
                                     "data-fieldname": "deleted",
