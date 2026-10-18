@@ -1,87 +1,105 @@
 # YNAB Payee Manager (`ynab-payee-rs`)
 
-This project is a client-side Single Page Application (SPA) built with Rust and [Dioxus 0.7](https://dioxuslabs.com/learn/0.7) compiled to WebAssembly (WASM). Its purpose is to provide a fast and streamlined tool for managing payees in YNAB (You Need A Budget), overcoming the limitations of the official web app's "Manage Payees" interface.
+Client-side Single Page Application (SPA) built with Rust and [Dioxus 0.7](https://dioxuslabs.com/learn/0.7) compiled to WebAssembly (WASM). The app provides a fast interface for viewing and managing payees in YNAB (You Need A Budget).
 
 ---
 
-## 1. Architecture & Core Concepts
+## 1. Architecture & Current State
 
-- **Client-Side Only**: Runs entirely in the browser using WASM. No backend server is required.
+- **Client-Side Only**: Runs entirely in the browser using WASM. There is no custom backend server; all requests go directly to the YNAB REST API from the browser.
 - **YNAB Authentication**:
-  - Uses OAuth 2.0 **Implicit Grant Flow** (`response_type=token`).
-  - Authorization endpoint: `https://app.ynab.com/oauth/authorize?client_id=...&redirect_uri=...&response_type=token&scope=`
-  - Redirect returns token in URL hash fragment (`#access_token=...&token_type=Bearer&expires_in=7200`).
-  - Hash is parsed on initial load, token is stored into IndexedDB, and the URL fragment is cleared via `window.history().replace_state_with_url` to avoid leaking the token.
+  - Implements OAuth 2.0 **Implicit Grant Flow** (`response_type=token`).
+  - Authorization endpoint: `https://app.ynab.com/oauth/authorize?client_id=Dszs-ubBjiUIP9pEHY7znF9LI_GrFdWSErx8zj84JWA&redirect_uri=http%3A%2F%2Flocalhost%3A8080&response_type=token&scope=`.
+  - The access token is delivered in the URL fragment hash (`#access_token=...`).
+  - On application mount, `get_token_from_hash()` parses the token, immediately strips the fragment from browser history via `window.history().replace_state_with_url`, and provides it for persistence.
+  - Token validity is tracked with `YnabToken`, currently defaulting to a 2-hour lifespan from time of creation.
 - **Budget Selection**:
-  - In YNAB OAuth apps with "Default Budget Selection" enabled, the user chooses which budget they want to authorize.
-  - The API path `/v1/budgets/default/payees` automatically routes to this user-selected budget without needing a hardcoded budget UUID.
-- **Local Persistence**:
-  - Uses browser **IndexedDB** via the `idb` crate.
-  - Object stores:
-    - `settings`: Stores the current `YnabToken` (token string and expiration).
-    - `payees`: Stores cached `Payee` records.
-    - `server_knowledge`: Stores the latest server delta knowledge integer for payees.
+  - Configured with `"default"` as the budget identifier (`BUDGET` global signal).
+  - In YNAB OAuth apps with Default Budget Selection enabled, `/v1/budgets/default/...` routes to whichever budget the user selected during OAuth consent.
+- **Local Persistence (IndexedDB)**:
+  - Database name: `ynab-payee-manager` (Version `10`).
+  - Managed via the `idb` crate with three object stores:
+    - `settings`: Stores the serialized `YnabToken` under key `"ynab_user_token"`.
+    - `payees`: Stores `Payee` records with inline key `id` and an index on `name`.
+    - `server_knowledge`: Stores the latest server knowledge integer (`u64`) for payees under key `"payees"`.
 - **API Communication**:
-  - `reqwest` (with `json` and `rustls`/WASM support) fetches from `https://api.ynab.com/v1/budgets/default/payees`.
+  - Uses `reqwest` with JSON and WASM support to query `https://api.ynab.com/v1/budgets/default/payees` with a Bearer token.
+  - Responses update both IndexedDB and in-memory global signals.
 
 ---
 
-## 2. Local Environment & Port Configuration
+## 2. Current Routes & UI Components
 
-> [!WARNING]
-> Port Conflict Notice: A local Docker compose stack (e.g., `odysseus-searxng-1`) may bind to `127.0.0.1:8080`.
-> If `SearXNG` appears instead of this app when navigating to `http://localhost:8080`, stop the container (`docker stop odysseus-searxng-1`) or rebind SearXNG's port.
-> The YNAB OAuth application `redirect_uri` is registered to `http://localhost:8080`. If you change the dev server port, you must also update the Redirect URI in the YNAB Developer portal.
+The application is structured into the following components and routes in `src/main.rs`:
 
-### Serving the App
-Run the Dioxus development server:
+- **`App`**: Root entry point. Sets document links (`favicon.ico`, `main.css`, `tailwind.css`), extracts the token from URL hash, initializes IndexedDB via `use_resource`, and passes the database handle to `AuthenticatedApp`.
+- **`AuthenticatedApp`**:
+  - Provides the database handle (`Arc<idb::Database>`) and `AuthActions` instance into Dioxus context.
+  - If no valid token is found, displays the login view with a "Login with YNAB" button.
+  - When authenticated with a valid token, renders `Router::<Route>`.
+- **`Navbar`**: Layout component wrapping child routes.
+  - Provides navigation links between Payees (`/`) and Transactions (`/transactions`).
+  - Displays a warning banner advising users to make a budget backup.
+  - Mounts child pages via `Outlet::<Route>`.
+- **`Payees` (`/`)**:
+  - Loads cached payee records and server knowledge from IndexedDB on initial mount.
+  - If IndexedDB is empty, automatically triggers an initial fetch from the YNAB API.
+  - Includes a manual "Sync Payees" button to fetch current payee data from the YNAB API, persist it to IndexedDB via `replace_payees`, and update in-memory cache signals.
+  - Renders a table displaying Payee ID, Name, Transfer Account ID, and Deleted status.
+- **`Transactions` (`/transactions`)**:
+  - Stub view rendering a placeholder transaction table (`TransactionList`, `Transaction`).
+
+---
+
+## 3. State Management & Data Flow
+
+- **Global Signals**:
+  - `PAYEES_CACHE: GlobalSignal<Vec<Payee>>`: In-memory cache of payees displayed in the UI.
+  - `PAYEES_KNOWLEDGE: GlobalSignal<u64>`: Server knowledge version returned by YNAB.
+  - `BUDGET: GlobalSignal<&str>`: Target budget ID string (`"default"`).
+- **Context Signals**:
+  - `Arc<idb::Database>`: Provided to the component tree.
+  - `AuthActions`: Exposes `token: Signal<Option<YnabToken>>` and `status: Signal<AuthActionStatus>` (`Idle`, `Loading`, `Saving`, `Error`).
+- **Dioxus 0.7 API Conventions**:
+  - No `cx` or `Scope`; state uses `Signal`, `use_signal`, `use_resource`, and `GlobalSignal`.
+  - Signal reading via `.read()` or `sig()`; signal mutation via `.write()` or `.set()`.
+  - Async operations spawned via `dioxus::core::spawn` or tracked via `use_resource`.
+  - Routes defined via `#[derive(Routable)]` with layout annotations.
+
+---
+
+## 4. Local Development & Tooling
+
+### Dev Server
+Run the application using the Dioxus CLI:
 ```sh
 dx serve --platform web --port 8080
 ```
 
----
+> [!WARNING]
+> Port Conflict Notice: A local Docker compose stack (e.g., `odysseus-searxng-1`) may bind to `127.0.0.1:8080`.
+> If SearXNG appears instead of this app, stop the container (`docker stop odysseus-searxng-1`) or change SearXNG's port.
+> The YNAB OAuth application `redirect_uri` is registered to `http://localhost:8080`.
 
-## 3. Dioxus 0.7 Rules & Guidelines
-
-Dioxus 0.7 removes `cx`, `Scope`, and `use_state`. All state is managed through `Signal`, `use_signal`, `use_resource`, `use_memo`, and `GlobalSignal`.
-
-### Dependency Configuration
-```toml
-[dependencies]
-dioxus = { version = "0.7.1", features = ["router"] }
-
-[features]
-default = ["web"]
-web = ["dioxus/web"]
-desktop = ["dioxus/desktop"]
-```
-
-### Components & Props
-- Components are functions annotated with `#[component]`.
-- Props must be owned values (`String`, `Vec<T>`), implementing `PartialEq` and `Clone`.
-- Wrap reactive props in `ReadOnlySignal` where appropriate.
-
-### State Management
-- `use_signal(|| initial_val)` for local state.
-- Calling `sig()` clones the value; `.read()` borrows; `.write()` or `.with_mut(...)` mutates.
-- `GlobalSignal::new(|| ...)` for application-wide signals.
-- Context is provided with `use_context_provider(|| value)` and retrieved with `use_context::<T>()`.
-
-### Async / Resources
-- Use `use_resource` to manage async data loading.
-- Spawning asynchronous tasks: `spawn(async move { ... })`.
-
-### Routing
-- Route enum derives `Routable, Clone, PartialEq`.
-- Child layouts use `#[layout(LayoutComponent)]` with `Outlet::<Route> {}`.
+### Nix Flake Environment
+The repository includes a `flake.nix` providing:
+- Rust toolchains (stable default, nightly, msrv) with `wasm32-unknown-unknown` target support.
+- `dioxus-cli` v0.7.10 (`dx`).
+- LLVM/Clang unwrapped compiler variables (`CC_wasm32_unknown_unknown`, `CXX_wasm32_unknown_unknown`, `AR_wasm32_unknown_unknown`) for WASM builds.
+- Devshell hook unsetting `NIX_LDFLAGS` and `NIX_LDFLAGS_FOR_BUILD` to avoid linker argument overflow during host build script compilation.
 
 ---
 
-## 4. Key Files
+## 5. Repository File Structure
 
-- `src/main.rs`: Root `App` component, router, OAuth callback parser, and `Payees` view.
-- `src/auth_actions.rs`: Manages auth state signals and IndexedDB token persistence.
-- `src/token.rs`: `YnabToken` struct with expiration tracking and validation.
-- `src/database.rs`: IndexedDB initialization and transaction helpers via `idb`.
-- `src/models.rs`: YNAB API models (`Payee`, `ResponseData`, `YnabResponse`).
-- `src/settings.rs`: IndexedDB store names and constant keys.
+- `Cargo.toml`: Package manifest with features (`web`, `desktop`, `mobile`) and dependencies (`dioxus 0.7.1`, `idb`, `reqwest`, `serde`, `chrono`, `wasm-bindgen`, `web-sys`).
+- `Dioxus.toml`: Dioxus web application configuration.
+- `flake.nix`: Nix development environments and package definitions.
+- `src/lib.rs`: Library module declarations and re-exports (`AuthActions`, `YnabToken`).
+- `src/main.rs`: Entry point, routing definitions, UI components (`App`, `AuthenticatedApp`, `Navbar`, `Payees`, `Transactions`), global signals, OAuth hash parsing, and API synchronization.
+- `src/auth_actions.rs`: `AuthActions` controller managing token retrieval, storage, and asynchronous status signals.
+- `src/database.rs`: IndexedDB creation, schema upgrades, token storage/retrieval, and payee CRUD functions (`create_database`, `store_ynab_token`, `get_ynab_token`, `replace_payees`, `get_payees`).
+- `src/models.rs`: YNAB data structures (`Payee`, `ResponseData`, `YnabResponse`).
+- `src/settings.rs`: Storage keys, database constants, and OAuth redirect URL.
+- `src/token.rs`: `YnabToken` struct with validity checking and timestamp calculations.
+- `assets/`: Static web assets (`favicon.ico`, `main.css`, `tailwind.css`, `header.svg`).
