@@ -53,8 +53,8 @@ fn App() -> Element {
 
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
-        document::Link { rel: "stylesheet", href: MAIN_CSS }
         document::Link { rel: "stylesheet", href: TAILWIND_CSS }
+        document::Link { rel: "stylesheet", href: MAIN_CSS }
 
         match db_handle {
             Some(db) => rsx! {
@@ -260,32 +260,54 @@ fn Payees() -> Element {
             class: "payees-header",
             button {
                 id: "get_payees",
+                class: "btn btn-primary",
                 onclick: refresh_payees,
                 disabled: *is_loading.read(),
                 if *is_loading.read() { "Syncing Payees..." } else { "Sync Payees" }
             }
             if let Some(err) = error_msg.read().as_ref() {
-                p { style: "color: red;", "Error: {err}" }
+                p { class: "error-banner", "Error: {err}" }
             }
         }
-        p { "Total Payees: {total_payees}{hidden_note} | Server Knowledge: {PAYEES_KNOWLEDGE.read()}" }
+        div {
+            class: "stats-bar",
+            span { "Total Payees: " strong { "{total_payees}" } }
+            if hidden_transfer_payees > 0 {
+                span { class: "stats-hidden-badge", "{hidden_note}" }
+            }
+            span { class: "stats-divider", "|" }
+            span { "Server Knowledge: " code { "{PAYEES_KNOWLEDGE.read()}" } }
+        }
 
         if *is_loading.read() && PAYEES_CACHE.read().is_empty() {
             p { "Loading payees from YNAB..." }
         } else {
-            table {
-                tr {
-                    th { "ID" }
-                    th { "Name" }
-                    th { "Transfer Account ID" }
-                    th { "Deleted" }
-                }
-                for payee in display_payees {
-                    tr {
-                        td {"data-fieldname": "id", "{payee.id}"},
-                        td {"data-fieldname": "name", "{payee.name}"},
-                        td {"data-fieldname": "transfer_acct_id", "{payee.transfer_account_id.as_deref().unwrap_or(\"None\")}"},
-                        td {"data-fieldname": "deleted", "{payee.deleted}"},
+            div {
+                class: "table-container",
+                table {
+                    thead {
+                        tr {
+                            th { "ID" }
+                            th { "Name" }
+                            th { "Transfer Account ID" }
+                            th { "Deleted" }
+                        }
+                    }
+                    tbody {
+                        for payee in display_payees {
+                            tr {
+                                td {"data-fieldname": "id", "{payee.id}"},
+                                td {"data-fieldname": "name", "{payee.name}"},
+                                td {"data-fieldname": "transfer_acct_id", "{payee.transfer_account_id.as_deref().unwrap_or(\"None\")}"},
+                                td {
+                                    "data-fieldname": "deleted",
+                                    span {
+                                        class: if payee.deleted { "status-badge status-deleted" } else { "status-badge status-active" },
+                                        "{payee.deleted}"
+                                    }
+                                },
+                            }
+                        }
                     }
                 }
             }
@@ -305,17 +327,24 @@ fn Transactions() -> Element {
 #[component]
 fn TransactionList() -> Element {
     rsx! {
-        table {
-            tr {
-                th { "Date" }
-                th { "Amount" }
-                th { "Memo" }
-                th { "Cleared" }
-                th { "Approved" }
-                th { "Payee Name" }
-                th { "Category" }
+        div {
+            class: "table-container",
+            table {
+                thead {
+                    tr {
+                        th { "Date" }
+                        th { "Amount" }
+                        th { "Memo" }
+                        th { "Cleared" }
+                        th { "Approved" }
+                        th { "Payee Name" }
+                        th { "Category" }
+                    }
+                }
+                tbody {
+                    Transaction {}
+                }
             }
-            Transaction {}
         }
     }
 }
@@ -340,21 +369,34 @@ fn Transaction() -> Element {
 #[component]
 fn Navbar() -> Element {
     rsx! {
-        div {
-            id: "navbar",
-            Link {
-                to: Route::Payees {},
-                "Payees"
+        header {
+            class: "app-header",
+            div {
+                class: "header-brand",
+                h1 { "YNAB Payee Manager" }
             }
-            Link {
-                to: Route::Transactions {},
-                "Transactions"
+            nav {
+                id: "navbar",
+                Link {
+                    to: Route::Payees {},
+                    class: "nav-link",
+                    "Payees"
+                }
+                Link {
+                    to: Route::Transactions {},
+                    class: "nav-link",
+                    "Transactions"
+                }
             }
         }
-        p {
-            "Warning: This app will directly affect your YNAB budget. "
-            "It will not make a backup for you. "
-            "Please make a backup yourself before using this."
+        div {
+            class: "warning-banner",
+            span { class: "warning-icon", "⚠️" }
+            span {
+                "Warning: This app will directly affect your YNAB budget. "
+                "It will not make a backup for you. "
+                "Please make a backup yourself before using this."
+            }
         }
 
         Outlet::<Route> {}
