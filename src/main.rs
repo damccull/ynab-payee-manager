@@ -238,7 +238,7 @@ fn Payees() -> Element {
     };
 
     let payees_cache = PAYEES_CACHE.read();
-    let display_payees: Vec<_> = payees_cache
+    let mut display_payees: Vec<_> = payees_cache
         .iter()
         .filter(|payee| {
             payee
@@ -247,6 +247,12 @@ fn Payees() -> Element {
                 .is_none_or(|id| id.trim().is_empty())
         })
         .collect();
+    display_payees.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| a.name.cmp(&b.name))
+    });
     let total_payees = payees_cache.len();
     let hidden_transfer_payees = total_payees - display_payees.len();
     let hidden_note = match hidden_transfer_payees {
