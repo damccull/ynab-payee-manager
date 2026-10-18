@@ -305,10 +305,16 @@ fn Payees() -> Element {
                                     "data-fieldname": "name",
                                     div {
                                         class: "payee-name-container",
-                                        span { class: "payee-name", "{payee.name}" }
-                                        span {
+                                        style: "display: flex; flex-direction: column; gap: 2px;",
+                                        div {
+                                            class: "payee-name",
+                                            style: "font-weight: 600;",
+                                            "{payee.name}"
+                                        }
+                                        div {
                                             class: "payee-id-subtext",
                                             "data-fieldname": "id",
+                                            style: "font-style: italic; font-size: 11px; color: #8b949e; font-family: ui-monospace, SFMono-Regular, monospace; margin-top: 2px;",
                                             "{payee.id}"
                                         }
                                     }
