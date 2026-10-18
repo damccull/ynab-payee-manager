@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use dioxus::{
     core::spawn,
     prelude::{debug, error},
-    signals::{ReadableExt, Signal, WritableExt},
+    signals::{Signal, WritableExt},
 };
 use idb::Database;
 
@@ -26,19 +25,22 @@ pub struct AuthActions {
     db: Arc<Database>,
     pub token: Signal<Option<YnabToken>>,
     pub status: Signal<AuthActionStatus>,
-    expires: DateTime<Utc>,
 }
 
 impl AuthActions {
-    /// Creates a new AuthActions and hydrates the token ([`YnabToken`]) from indexdb if it exists
-    pub fn new(db: Arc<Database>) -> Self {
+    /// Creates a new AuthActions and hydrates the token ([`YnabToken`]) from indexdb if it exists,
+    /// or stores the initial token if provided.
+    pub fn new(db: Arc<Database>, initial_token: Option<YnabToken>) -> Self {
         let aa = Self {
             db,
             status: Signal::new(AuthActionStatus::Idle),
-            token: Signal::new(None),
-            expires: Utc::now(),
+            token: Signal::new(initial_token.clone()),
         };
-        aa.get_token();
+        if let Some(tok) = initial_token {
+            aa.store_token(tok);
+        } else {
+            aa.get_token();
+        }
         aa
     }
 

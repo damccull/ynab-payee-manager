@@ -1,6 +1,6 @@
 use dioxus::prelude::{debug, error, trace};
 use idb::{Database, DatabaseEvent, Factory, IndexParams, KeyPath, ObjectStoreParams};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_wasm_bindgen::{from_value, Serializer};
 use wasm_bindgen::JsValue;
 
@@ -24,8 +24,8 @@ pub async fn create_database() -> Result<Database, DatabaseError> {
         // Get database instance from event
         let database = event.database().expect("unable to get database from event");
 
-        database.delete_object_store(PAYEES_STORE_NAME);
-        database.delete_object_store(KNOWLEDGE_STORE_NAME);
+        let _ = database.delete_object_store(PAYEES_STORE_NAME);
+        let _ = database.delete_object_store(KNOWLEDGE_STORE_NAME);
 
         // Prepare object store parameters
         let mut payees_params = ObjectStoreParams::new();
@@ -43,7 +43,7 @@ pub async fn create_database() -> Result<Database, DatabaseError> {
         payees_index_parameters.unique(false);
 
         // Create an index for 'name' on the payees_store
-        payees_store
+        let _ = payees_store
             .create_index(
                 "name",
                 KeyPath::new_single("name"),
@@ -57,17 +57,19 @@ pub async fn create_database() -> Result<Database, DatabaseError> {
 
         // knowledge_params.key_path(Some(KeyPath::new_single("name")));
         knowledge_params.key_path(None);
-        let knowledge_store = database
+        let _knowledge_store = database
             .create_object_store(KNOWLEDGE_STORE_NAME, knowledge_params)
             .map_err(|e| error!("unable to create server_knowledge store: {:#?}", e));
 
-        let mut settings_params = ObjectStoreParams::new();
-        settings_params.auto_increment(false);
+        if !database.store_names().contains(&SETTINGS_STORE_NAME.to_string()) {
+            let mut settings_params = ObjectStoreParams::new();
+            settings_params.auto_increment(false);
 
-        let settings_store = database
-            .create_object_store(SETTINGS_STORE_NAME, settings_params)
-            .map_err(|e| error!("unable to create settings store: {:#?}", e))
-            .expect("unable to get object store for settings");
+            let _settings_store = database
+                .create_object_store(SETTINGS_STORE_NAME, settings_params)
+                .map_err(|e| error!("unable to create settings store: {:#?}", e))
+                .expect("unable to get object store for settings");
+        }
     });
 
     Ok(open_request.await?)
@@ -82,7 +84,7 @@ pub async fn store_ynab_token(
 
     let store = transaction.object_store(SETTINGS_STORE_NAME)?;
 
-    let id = store
+    let _id = store
         .put(
             &token
                 .serialize(&Serializer::json_compatible())
@@ -90,6 +92,7 @@ pub async fn store_ynab_token(
             Some(&JsValue::from_str(SETTINGS_KEY_TOKEN)),
         )?
         .await?;
+    transaction.commit()?.await?;
     Ok(token.to_owned())
 }
 
