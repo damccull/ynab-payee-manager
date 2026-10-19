@@ -254,7 +254,7 @@ pub fn Duplicates(
                                                                         let mut cur = groups.read().clone();
                                                                         if let Some(target_g) = cur.iter_mut().find(|g| g.id == g_id) {
                                                                             if let Some(c) = target_g.candidates.get_mut(cand_idx) {
-                                                                                c.is_checked = evt.value() == "true";
+                                                                                c.is_checked = evt.checked();
                                                                             }
                                                                         }
                                                                         groups.set(cur);
@@ -308,12 +308,17 @@ pub fn Duplicates(
                                                 disabled: checked_count < 2,
                                                 onclick: {
                                                     let g_id = group_id.clone();
-                                                    let g_data = local_group.clone();
                                                     let db = db.clone();
                                                     let mut review_count = review_count;
+                                                    let mut feedback_msg = feedback_msg;
 
                                                     move |_| {
-                                                        let checked_candidates: Vec<_> = g_data
+                                                        let cur = groups.read().clone();
+                                                        let Some(target_group) = cur.iter().find(|g| g.id == g_id).cloned() else {
+                                                            return;
+                                                        };
+
+                                                        let checked_candidates: Vec<_> = target_group
                                                             .candidates
                                                             .iter()
                                                             .filter(|c| c.is_checked)
@@ -328,10 +333,11 @@ pub fn Duplicates(
                                                                 .iter()
                                                                 .map(|c| c.payee.name.clone())
                                                                 .collect();
+                                                            let count = source_ids.len();
 
                                                             let review_item = PayeeReviewItem {
                                                                 id: uuid::Uuid::new_v4().to_string(),
-                                                                suggested_name: g_data.suggested_target_name.clone(),
+                                                                suggested_name: target_group.suggested_target_name.clone(),
                                                                 custom_name: None,
                                                                 source_payee_ids: source_ids,
                                                                 source_payee_names: source_names,
@@ -342,15 +348,22 @@ pub fn Duplicates(
                                                             let g_id_to_remove = g_id.clone();
 
                                                             spawn(async move {
-                                                                if let Ok(()) = save_review_item(&db, &review_item).await {
-                                                                    // Update review count signal
-                                                                    if let Ok(items) = get_review_items(&db).await {
-                                                                        *review_count.write() = items.len();
+                                                                match save_review_item(&db, &review_item).await {
+                                                                    Ok(()) => {
+                                                                        if let Ok(items) = get_review_items(&db).await {
+                                                                            *review_count.write() = items.len();
+                                                                        }
+                                                                        let mut cur = groups.read().clone();
+                                                                        cur.retain(|g| g.id != g_id_to_remove);
+                                                                        groups.set(cur);
+                                                                        feedback_msg.set(Some(format!(
+                                                                            "Combined {} payees into '{}' and queued for review.",
+                                                                            count, review_item.suggested_name
+                                                                        )));
                                                                     }
-                                                                    // Remove group from UI
-                                                                    let mut cur = groups.read().clone();
-                                                                    cur.retain(|g| g.id != g_id_to_remove);
-                                                                    groups.set(cur);
+                                                                    Err(e) => {
+                                                                        feedback_msg.set(Some(format!("Database error: {:?}", e)));
+                                                                    }
                                                                 }
                                                             });
                                                         }

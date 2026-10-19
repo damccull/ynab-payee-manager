@@ -84,7 +84,6 @@ pub fn ReviewQueue(
                             let current_display_name = item.display_name().to_string();
                             let suggested_name = item.suggested_name.clone();
                             let source_names = item.source_payee_names.clone();
-                            let source_ids = item.source_payee_ids.clone();
                             let created_str = item.created_at.format("%Y-%m-%d %H:%M UTC").to_string();
 
                             let db = db.clone();
@@ -170,17 +169,18 @@ pub fn ReviewQueue(
                                             class: "btn btn-sm btn-primary",
                                             onclick: {
                                                 let item_id = item_id.clone();
-                                                let target_name = current_display_name.clone();
-                                                let source_ids = source_ids.clone();
-                                                let source_names = source_names.clone();
                                                 let db = db.clone();
 
                                                 move |_| {
                                                     let db = db.clone();
                                                     let item_id = item_id.clone();
-                                                    let target_name = target_name.clone();
-                                                    let source_ids = source_ids.clone();
-                                                    let source_names = source_names.clone();
+                                                    let cur_items = review_items.read().clone();
+                                                    let Some(live_item) = cur_items.iter().find(|i| i.id == item_id).cloned() else {
+                                                        return;
+                                                    };
+                                                    let target_name = live_item.display_name().to_string();
+                                                    let source_ids = live_item.source_payee_ids.clone();
+                                                    let source_names = live_item.source_payee_names.clone();
 
                                                     spawn(async move {
                                                         if source_ids.is_empty() {
@@ -210,22 +210,27 @@ pub fn ReviewQueue(
                                                             confirmed_at: None,
                                                         };
 
-                                                        if let Ok(()) = enqueue_action(&db, &action).await {
-                                                            let _ = delete_review_item(&db, &item_id).await;
+                                                        match enqueue_action(&db, &action).await {
+                                                            Ok(()) => {
+                                                                let _ = delete_review_item(&db, &item_id).await;
 
-                                                            // Update counts
-                                                            if let Ok(items) = get_review_items(&db).await {
-                                                                *review_count.write() = items.len();
-                                                                review_items.set(items);
-                                                            }
-                                                            if let Ok(pending) = get_pending_actions(&db).await {
-                                                                *action_count.write() = pending.len();
-                                                            }
+                                                                // Update counts
+                                                                if let Ok(items) = get_review_items(&db).await {
+                                                                    *review_count.write() = items.len();
+                                                                    review_items.set(items);
+                                                                }
+                                                                if let Ok(pending) = get_pending_actions(&db).await {
+                                                                    *action_count.write() = pending.len();
+                                                                }
 
-                                                            notification.set(Some(format!(
-                                                                "Enqueued merge action for '{}' in Action Queue.",
-                                                                target_name
-                                                            )));
+                                                                notification.set(Some(format!(
+                                                                    "Enqueued merge action for '{}' in Action Queue.",
+                                                                    target_name
+                                                                )));
+                                                            }
+                                                            Err(e) => {
+                                                                notification.set(Some(format!("Database error queueing action: {:?}", e)));
+                                                            }
                                                         }
                                                     });
                                                 }
