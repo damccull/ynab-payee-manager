@@ -31,6 +31,8 @@ web-sys = { version = "0.3.85", features = [
   "UrlSearchParams",
   "History",
 ] }
+strsim = "0.11"
+uuid = { version = "1.10", features = ["v4", "js", "serde"] }
 
 [features]
 default = ["web"]

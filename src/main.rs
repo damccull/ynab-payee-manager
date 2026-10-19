@@ -5,8 +5,9 @@ use reqwest::header::HeaderMap;
 use wasm_bindgen::JsValue;
 
 use ynab_payee_rs::{
-    database::{create_database, get_payees, replace_payees},
+    database::{create_database, get_payees, get_pending_actions, get_review_items, replace_payees},
     models::{Payee, YnabResponse},
+    views::{ActionQueue, Duplicates, ReviewQueue},
     AuthActions, AuthActionStatus,
 };
 
@@ -16,6 +17,12 @@ enum Route {
     #[layout(Navbar)]
         #[route("/")]
         Payees {},
+        #[route("/duplicates")]
+        DuplicatesPage {},
+        #[route("/review")]
+        ReviewPage {},
+        #[route("/actions")]
+        ActionsPage {},
         #[route("/transactions")]
         Transactions {},
 }
@@ -30,6 +37,8 @@ static PAYEES_KNOWLEDGE: GlobalSignal<u64> = GlobalSignal::new(|| 0);
 /// The budget ID to use when talking to the API.
 /// "default" routes to the budget selected by the user on the YNAB OAuth authorization page.
 static BUDGET: GlobalSignal<&str> = GlobalSignal::new(|| "default");
+static REVIEW_QUEUE_COUNT: GlobalSignal<usize> = GlobalSignal::new(|| 0);
+static ACTION_QUEUE_COUNT: GlobalSignal<usize> = GlobalSignal::new(|| 0);
 
 fn main() {
     dioxus::launch(App);
@@ -89,12 +98,26 @@ fn AuthenticatedApp(db: DbHandle, callback_access_token: Option<String>) -> Elem
     debug!("added database handle to context");
 
     let initial_token = callback_access_token.clone().map(Into::into);
+    let db_for_auth = db.clone();
     let auth_actions = use_hook(move || {
-        let aa = AuthActions::new(db.clone(), initial_token);
+        let aa = AuthActions::new(db_for_auth.clone(), initial_token);
         aa
     });
     use_context_provider(|| auth_actions.clone());
     debug!("added auth_actions handle to context");
+
+    let db_for_counts = db.clone();
+    use_effect(move || {
+        let db = db_for_counts.clone();
+        spawn(async move {
+            if let Ok(items) = get_review_items(&db).await {
+                *REVIEW_QUEUE_COUNT.write() = items.len();
+            }
+            if let Ok(pending) = get_pending_actions(&db).await {
+                *ACTION_QUEUE_COUNT.write() = pending.len();
+            }
+        });
+    });
 
     let do_login = move |_| {
         let auth_url = "https://app.ynab.com/oauth/authorize?client_id=Dszs-ubBjiUIP9pEHY7znF9LI_GrFdWSErx8zj84JWA&redirect_uri=http%3A%2F%2Flocalhost%3A8080&response_type=token&scope=";
@@ -336,6 +359,40 @@ fn Payees() -> Element {
     }
 }
 
+/// Duplicates Page
+#[component]
+fn DuplicatesPage() -> Element {
+    rsx! {
+        Duplicates {
+            payees_cache: PAYEES_CACHE.signal(),
+            review_count: REVIEW_QUEUE_COUNT.signal(),
+        }
+    }
+}
+
+/// Review Page
+#[component]
+fn ReviewPage() -> Element {
+    rsx! {
+        ReviewQueue {
+            review_count: REVIEW_QUEUE_COUNT.signal(),
+            action_count: ACTION_QUEUE_COUNT.signal(),
+        }
+    }
+}
+
+/// Actions Page
+#[component]
+fn ActionsPage() -> Element {
+    rsx! {
+        ActionQueue {
+            budget_id: (*BUDGET.read()).to_string(),
+            action_count: ACTION_QUEUE_COUNT.signal(),
+            payees_cache: PAYEES_CACHE.signal(),
+        }
+    }
+}
+
 /// Transaction Page
 #[component]
 fn Transactions() -> Element {
@@ -389,6 +446,9 @@ fn Transaction() -> Element {
 /// Shared navbar component.
 #[component]
 fn Navbar() -> Element {
+    let review_cnt = *REVIEW_QUEUE_COUNT.read();
+    let action_cnt = *ACTION_QUEUE_COUNT.read();
+
     rsx! {
         header {
             class: "app-header",
@@ -402,6 +462,27 @@ fn Navbar() -> Element {
                     to: Route::Payees {},
                     class: "nav-link",
                     "Payees"
+                }
+                Link {
+                    to: Route::DuplicatesPage {},
+                    class: "nav-link",
+                    "Find Duplicates"
+                }
+                Link {
+                    to: Route::ReviewPage {},
+                    class: "nav-link nav-link-badge",
+                    span { "Review Names" }
+                    if review_cnt > 0 {
+                        span { class: "nav-badge", "{review_cnt}" }
+                    }
+                }
+                Link {
+                    to: Route::ActionsPage {},
+                    class: "nav-link nav-link-badge",
+                    span { "Action Queue" }
+                    if action_cnt > 0 {
+                        span { class: "nav-badge nav-badge-action", "{action_cnt}" }
+                    }
                 }
                 Link {
                     to: Route::Transactions {},
