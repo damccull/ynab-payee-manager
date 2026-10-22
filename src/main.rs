@@ -360,6 +360,7 @@ struct TransactionSlot {
     visible: bool,
     date: String,
     amount_str: String,
+    is_negative: bool,
     payee_name: String,
     category_name: String,
     memo: String,
@@ -376,10 +377,15 @@ fn update_slot_pool(pool: &mut Signal<Vec<TransactionSlot>>, items: &[Transactio
             slot.visible = true;
             slot.date.clear();
             slot.date.push_str(&tx.date);
+            slot.is_negative = tx.amount < 0;
             slot.amount_str.clear();
-            let amount_dollars = (tx.amount as f64) / 1000.0;
+            let amount_dollars = (tx.amount.abs() as f64) / 1000.0;
             use std::fmt::Write;
-            let _ = write!(&mut slot.amount_str, "${:.2}", amount_dollars);
+            if tx.amount < 0 {
+                let _ = write!(&mut slot.amount_str, "-${:.2}", amount_dollars);
+            } else {
+                let _ = write!(&mut slot.amount_str, "${:.2}", amount_dollars);
+            }
             slot.payee_name.clear();
             slot.payee_name.push_str(tx.payee_name.as_deref().unwrap_or("None"));
             slot.category_name.clear();
@@ -605,7 +611,11 @@ fn Transactions() -> Element {
                                 key: "{idx}",
                                 style: if !slot.visible { "display: none;" } else { "" },
                                 td { "data-fieldname": "date", "{slot.date}" }
-                                td { "data-fieldname": "amount", "{slot.amount_str}" }
+                                td {
+                                    "data-fieldname": "amount",
+                                    class: if slot.is_negative { "amount-negative" } else { "amount-positive" },
+                                    "{slot.amount_str}"
+                                }
                                 td { "data-fieldname": "payee_name", "{slot.payee_name}" }
                                 td { "data-fieldname": "category_name", "{slot.category_name}" }
                                 td { "data-fieldname": "memo", "{slot.memo}" }

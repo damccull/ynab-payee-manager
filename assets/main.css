@@ -346,6 +346,14 @@ td[data-fieldname="amount"] {
     color: var(--text-primary);
 }
 
+.amount-negative {
+    color: var(--accent-red) !important;
+}
+
+.amount-positive {
+    color: var(--text-primary);
+}
+
 /* Status Badges */
 .status-badge {
     display: inline-block;
