@@ -7,7 +7,7 @@ use ynab_payee_rs::{
     api::{fetch_and_store_payees, fetch_and_store_transactions},
     database::{
         create_database, get_payees, get_pending_actions, get_review_items, get_transactions,
-        nuke_database, search_transactions_paged, ProcessedTransaction,
+        nuke_database, search_transactions_paged, ProcessedTransaction, TransferPairRole,
     },
     models::{Payee, Transaction},
     views::{ActionQueue, Duplicates, ReviewQueue},
@@ -364,6 +364,8 @@ struct TransactionSlot {
     inflow_str: String,
     has_inflow: bool,
     is_transfer: bool,
+    is_pair_first: bool,
+    is_pair_second: bool,
     payee_name: String,
     category_name: String,
     memo: String,
@@ -402,6 +404,8 @@ fn update_slot_pool(pool: &mut Signal<Vec<TransactionSlot>>, items: &[ProcessedT
             }
 
             slot.is_transfer = tx.is_transfer;
+            slot.is_pair_first = tx.pair_role == TransferPairRole::First;
+            slot.is_pair_second = tx.pair_role == TransferPairRole::Second;
 
             slot.payee_name.clear();
             if let Some(ref p) = tx.payee_name {
@@ -637,8 +641,25 @@ fn Transactions() -> Element {
                         for (idx, slot) in pool.iter().enumerate() {
                             tr {
                                 key: "{idx}",
+                                class: if slot.is_pair_first {
+                                    "transfer-pair-row transfer-pair-first"
+                                } else if slot.is_pair_second {
+                                    "transfer-pair-row transfer-pair-second"
+                                } else {
+                                    ""
+                                },
                                 style: if !slot.visible { "display: none;" } else { "" },
-                                td { "data-fieldname": "date", "{slot.date}" }
+                                td {
+                                    "data-fieldname": "date",
+                                    if slot.is_pair_first {
+                                        div {
+                                            class: "transfer-pair-icon",
+                                            title: "account-to-account transfer",
+                                            "⇄"
+                                        }
+                                    }
+                                    "{slot.date}"
+                                }
                                 td {
                                     "data-fieldname": "outflow",
                                     class: if slot.has_outflow { "amount-outflow" } else { "amount-empty" },
@@ -653,17 +674,9 @@ fn Transactions() -> Element {
                                     "data-fieldname": "payee_name",
                                     if slot.is_transfer {
                                         span {
-                                            class: "transfer-unit",
+                                            class: "transfer-label-text",
                                             title: "account-to-account transfer",
-                                            span {
-                                                class: "transfer-icon",
-                                                title: "account-to-account transfer",
-                                                "⇄"
-                                            }
-                                            span {
-                                                class: "transfer-label",
-                                                "Transfer"
-                                            }
+                                            "Transfer"
                                         }
                                     } else if slot.payee_name.is_empty() {
                                         span { class: "text-muted", "None" }

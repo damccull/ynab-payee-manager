@@ -394,6 +394,56 @@ td[data-fieldname="amount"] {
     color: #58a6ff;
 }
 
+/* Transfer Pair Row Styling */
+tr.transfer-pair-row td:first-child {
+    border-left: 3px solid #388bfd;
+    position: relative;
+    padding-left: 36px;
+}
+
+tr.transfer-pair-first td {
+    border-bottom: 1px dashed rgba(56, 139, 253, 0.35);
+}
+
+tr.transfer-pair-first,
+tr.transfer-pair-second {
+    background-color: rgba(56, 139, 253, 0.03);
+}
+
+.transfer-pair-icon {
+    position: absolute;
+    left: 8px;
+    bottom: -11px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background-color: #161b22;
+    border: 1px solid #388bfd;
+    color: #58a6ff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    z-index: 5;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+    cursor: default;
+    user-select: none;
+    transition: transform 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.transfer-pair-icon:hover {
+    background-color: #21262d;
+    border-color: #58a6ff;
+    transform: scale(1.15);
+}
+
+.transfer-label-text {
+    color: #58a6ff;
+    font-weight: 500;
+}
+
 .text-muted {
     color: var(--text-muted);
 }
