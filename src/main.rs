@@ -337,9 +337,7 @@ fn Payees() -> Element {
                         tr {
                             th { style: "width: 44px; text-align: center;", "" }
                             th { "Name" }
-                            th { style: "text-align: right; width: 120px;", "Transactions" }
-                            th { "Transfer Account ID" }
-                            th { "Deleted" }
+                            th { style: "text-align: right; width: 140px;", "Transactions" }
                         }
                     }
                     tbody {
@@ -395,17 +393,6 @@ fn Payees() -> Element {
                                             span {
                                                 class: if count == 0 { "tx-count-zero" } else { "tx-count-badge" },
                                                 "{count}"
-                                            }
-                                        }
-                                        td {
-                                            "data-fieldname": "transfer_acct_id",
-                                            "{payee.transfer_account_id.as_deref().unwrap_or(\"None\")}"
-                                        }
-                                        td {
-                                            "data-fieldname": "deleted",
-                                            span {
-                                                class: if payee.deleted { "status-badge status-deleted" } else { "status-badge status-active" },
-                                                "{payee.deleted}"
                                             }
                                         }
                                     }
