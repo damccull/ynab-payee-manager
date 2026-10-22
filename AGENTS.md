@@ -51,7 +51,7 @@ The application is structured into the following components and routes in `src/m
   - If IndexedDB is empty, automatically triggers an initial fetch from the YNAB API.
   - Renders a table displaying Payee Name, Payee ID subtext, Transfer Account ID, and Deleted status.
 - **`Transactions` (`/transactions`)**:
-  - Displays cached transactions stored in IndexedDB with date, payee, memo, amount, cleared, and approved status.
+  - Displays cached transactions stored in IndexedDB using server-side style indexed search, pagination (50 items/page), and a pre-allocated DOM slot pool that mutates row values in-place without re-allocating DOM nodes or heap memory.
 - **`Duplicates` (`/duplicates`)**:
   - Scans cached payees (excluding payees with 0 transactions and those already queued) using fuzzy string similarity clustering (defaulting to strict matching).
   - Allows selecting duplicate payees to combine and queuing them into the Payee Review Queue.

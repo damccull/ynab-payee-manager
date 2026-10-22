@@ -353,6 +353,106 @@ pub async fn get_transactions(
     Ok((txs, knowledge))
 }
 
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PagedTransactions {
+    pub items: Vec<Transaction>,
+    pub total_count: usize,
+    pub current_page: usize,
+    pub page_size: usize,
+    pub total_pages: usize,
+}
+
+pub async fn get_transactions_count(database: &Database) -> Result<usize, DatabaseError> {
+    let transaction = database.transaction(
+        &[TRANSACTIONS_STORE_NAME],
+        idb::TransactionMode::ReadOnly,
+    )?;
+    let store = transaction.object_store(TRANSACTIONS_STORE_NAME)?;
+    let count = store.count(None)?.await?;
+    transaction.await?;
+    Ok(count as usize)
+}
+
+pub fn filter_and_page_transactions(
+    txs: impl IntoIterator<Item = Transaction>,
+    query: &str,
+    page: usize,
+    page_size: usize,
+) -> PagedTransactions {
+    let query_trimmed = query.trim().to_lowercase();
+    let has_query = !query_trimmed.is_empty();
+
+    let mut all_txs: Vec<Transaction> = txs
+        .into_iter()
+        .filter(|tx| {
+            if tx.deleted {
+                return false;
+            }
+            if !has_query {
+                return true;
+            }
+            tx.date.to_lowercase().contains(&query_trimmed)
+                || tx.payee_name.as_deref().unwrap_or("").to_lowercase().contains(&query_trimmed)
+                || tx.category_name.as_deref().unwrap_or("").to_lowercase().contains(&query_trimmed)
+                || tx.memo.as_deref().unwrap_or("").to_lowercase().contains(&query_trimmed)
+                || format!("{:.2}", (tx.amount as f64) / 1000.0).contains(&query_trimmed)
+                || tx.cleared.to_lowercase().contains(&query_trimmed)
+        })
+        .collect();
+
+    // Sort newest to oldest
+    all_txs.sort_by(|a, b| b.date.cmp(&a.date));
+
+    let total_count = all_txs.len();
+    let total_pages = if total_count == 0 {
+        1
+    } else {
+        (total_count + page_size - 1) / page_size
+    };
+    let current_page = page.min(total_pages.saturating_sub(1));
+    let start = current_page * page_size;
+    let end = (start + page_size).min(total_count);
+
+    let items = if start < end {
+        all_txs[start..end].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    PagedTransactions {
+        items,
+        total_count,
+        current_page,
+        page_size,
+        total_pages,
+    }
+}
+
+pub async fn search_transactions_paged(
+    database: &Database,
+    query: &str,
+    page: usize,
+    page_size: usize,
+) -> Result<PagedTransactions, DatabaseError> {
+    let transaction = database.transaction(
+        &[TRANSACTIONS_STORE_NAME],
+        idb::TransactionMode::ReadOnly,
+    )?;
+
+    let store = transaction.object_store(TRANSACTIONS_STORE_NAME)?;
+    let stored = store.get_all(None, None)?.await?;
+
+    let txs = stored
+        .into_iter()
+        .filter_map(|v| serde_wasm_bindgen::from_value::<Transaction>(v).ok());
+
+    let paged = filter_and_page_transactions(txs, query, page, page_size);
+
+    transaction.await?;
+
+    Ok(paged)
+}
+
 pub async fn get_active_payee_ids(
     database: &Database,
 ) -> Result<HashSet<String>, DatabaseError> {
@@ -567,4 +667,96 @@ pub enum DatabaseError {
     IndexDbError(#[from] idb::Error),
     #[error(transparent)]
     UnexpectedError(#[from] anyhow::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::Transaction;
+
+    fn make_test_tx(id: &str, date: &str, payee: &str, amount: i64, memo: &str) -> Transaction {
+        Transaction {
+            id: id.to_string(),
+            date: date.to_string(),
+            amount,
+            memo: Some(memo.to_string()),
+            cleared: "cleared".to_string(),
+            approved: true,
+            payee_id: Some(format!("p_{}", id)),
+            payee_name: Some(payee.to_string()),
+            category_id: None,
+            category_name: Some("Dining".to_string()),
+            deleted: false,
+        }
+    }
+
+    #[test]
+    fn test_filter_and_page_empty() {
+        let paged = filter_and_page_transactions(Vec::<Transaction>::new(), "", 0, 10);
+        assert_eq!(paged.total_count, 0);
+        assert_eq!(paged.total_pages, 1);
+        assert_eq!(paged.current_page, 0);
+        assert!(paged.items.is_empty());
+    }
+
+    #[test]
+    fn test_filter_and_page_sorting_and_paging() {
+        let txs = vec![
+            make_test_tx("1", "2024-01-01", "Coffee Shop", 5000, "Morning coffee"),
+            make_test_tx("2", "2024-03-15", "Grocery Store", 75000, "Weekly groceries"),
+            make_test_tx("3", "2024-02-10", "Bookstore", 25000, "Novel"),
+            make_test_tx("4", "2024-04-01", "Gas Station", 45000, "Fuel"),
+            make_test_tx("5", "2024-03-20", "Grocery Store", 32000, "Milk and bread"),
+        ];
+
+        // Page 0 with size 2 (should be newest first: 2024-04-01, 2024-03-20)
+        let paged = filter_and_page_transactions(txs.clone(), "", 0, 2);
+        assert_eq!(paged.total_count, 5);
+        assert_eq!(paged.total_pages, 3);
+        assert_eq!(paged.current_page, 0);
+        assert_eq!(paged.items.len(), 2);
+        assert_eq!(paged.items[0].date, "2024-04-01");
+        assert_eq!(paged.items[1].date, "2024-03-20");
+
+        // Page 1 with size 2 (should be 2024-03-15, 2024-02-10)
+        let paged = filter_and_page_transactions(txs.clone(), "", 1, 2);
+        assert_eq!(paged.current_page, 1);
+        assert_eq!(paged.items.len(), 2);
+        assert_eq!(paged.items[0].date, "2024-03-15");
+        assert_eq!(paged.items[1].date, "2024-02-10");
+
+        // Page 2 with size 2 (last page, 1 item: 2024-01-01)
+        let paged = filter_and_page_transactions(txs.clone(), "", 2, 2);
+        assert_eq!(paged.current_page, 2);
+        assert_eq!(paged.items.len(), 1);
+        assert_eq!(paged.items[0].date, "2024-01-01");
+    }
+
+    #[test]
+    fn test_filter_by_search_query() {
+        let txs = vec![
+            make_test_tx("1", "2024-01-01", "Trader Joe's", 50000, "Snacks"),
+            make_test_tx("2", "2024-01-02", "Safeway", 20000, "Produce"),
+            make_test_tx("3", "2024-01-03", "Target", 15000, "Household"),
+        ];
+
+        let paged = filter_and_page_transactions(txs.clone(), "trader", 0, 10);
+        assert_eq!(paged.total_count, 1);
+        assert_eq!(paged.items[0].id, "1");
+
+        let paged_memo = filter_and_page_transactions(txs.clone(), "produce", 0, 10);
+        assert_eq!(paged_memo.total_count, 1);
+        assert_eq!(paged_memo.items[0].id, "2");
+    }
+
+    #[test]
+    fn test_deleted_transactions_excluded() {
+        let tx1 = make_test_tx("1", "2024-01-01", "Active Payee", 10000, "");
+        let mut tx2 = make_test_tx("2", "2024-01-02", "Deleted Payee", 20000, "");
+        tx2.deleted = true;
+
+        let paged = filter_and_page_transactions(vec![tx1, tx2], "", 0, 10);
+        assert_eq!(paged.total_count, 1);
+        assert_eq!(paged.items[0].id, "1");
+    }
 }

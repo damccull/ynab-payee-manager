@@ -7,7 +7,7 @@ use ynab_payee_rs::{
     api::{fetch_and_store_payees, fetch_and_store_transactions},
     database::{
         create_database, get_payees, get_pending_actions, get_review_items, get_transactions,
-        nuke_database,
+        nuke_database, search_transactions_paged,
     },
     models::{Payee, Transaction},
     views::{ActionQueue, Duplicates, ReviewQueue},
@@ -353,24 +353,165 @@ fn ActionsPage() -> Element {
     }
 }
 
+const TX_PAGE_SIZE: usize = 50;
+
+#[derive(Clone, PartialEq, Default, Debug)]
+struct TransactionSlot {
+    visible: bool,
+    date: String,
+    amount_str: String,
+    payee_name: String,
+    category_name: String,
+    memo: String,
+    cleared: String,
+    approved: bool,
+}
+
+fn update_slot_pool(pool: &mut Signal<Vec<TransactionSlot>>, items: &[Transaction]) {
+    let mut guard = pool.write();
+    for i in 0..TX_PAGE_SIZE {
+        let slot = &mut guard[i];
+        if i < items.len() {
+            let tx = &items[i];
+            slot.visible = true;
+            slot.date.clear();
+            slot.date.push_str(&tx.date);
+            slot.amount_str.clear();
+            let amount_dollars = (tx.amount as f64) / 1000.0;
+            use std::fmt::Write;
+            let _ = write!(&mut slot.amount_str, "${:.2}", amount_dollars);
+            slot.payee_name.clear();
+            slot.payee_name.push_str(tx.payee_name.as_deref().unwrap_or("None"));
+            slot.category_name.clear();
+            slot.category_name.push_str(tx.category_name.as_deref().unwrap_or("Uncategorized"));
+            slot.memo.clear();
+            slot.memo.push_str(tx.memo.as_deref().unwrap_or(""));
+            slot.cleared.clear();
+            slot.cleared.push_str(&tx.cleared);
+            slot.approved = tx.approved;
+        } else {
+            slot.visible = false;
+        }
+    }
+}
+
 /// Transaction Page
 #[component]
 fn Transactions() -> Element {
-    let txs = TRANSACTIONS_CACHE.read();
+    let db = use_context::<Arc<idb::Database>>();
+
+    let mut row_pool = use_signal(|| vec![TransactionSlot::default(); TX_PAGE_SIZE]);
+    let mut current_page = use_signal(|| 0usize);
+    let mut total_count = use_signal(|| 0usize);
+    let mut total_pages = use_signal(|| 1usize);
+    let mut search_query = use_signal(|| String::new());
+    let mut is_loading = use_signal(|| false);
+    let mut has_loaded = use_signal(|| false);
+
+    let db_for_load = db.clone();
+    let load_page = move |page: usize, query: String| {
+        let db = db_for_load.clone();
+        spawn(async move {
+            is_loading.set(true);
+            match search_transactions_paged(&db, &query, page, TX_PAGE_SIZE).await {
+                Ok(paged) => {
+                    current_page.set(paged.current_page);
+                    total_count.set(paged.total_count);
+                    total_pages.set(paged.total_pages);
+                    update_slot_pool(&mut row_pool, &paged.items);
+                    has_loaded.set(true);
+                }
+                Err(e) => {
+                    error!("Failed to load paged transactions from db: {:?}", e);
+                }
+            }
+            is_loading.set(false);
+        });
+    };
+
+    // Initial load and auto-refresh on transaction knowledge update
+    use_effect({
+        let load_page = load_page.clone();
+        move || {
+            let _ = *TRANSACTIONS_KNOWLEDGE.read();
+            let q = search_query.read().clone();
+            let p = *current_page.read();
+            load_page(p, q);
+        }
+    });
+
+    let pool = row_pool.read();
+    let count = *total_count.read();
+    let page = *current_page.read();
+    let pages = *total_pages.read();
+    let query_str = search_query.read().clone();
+
+    let start_item = if count == 0 { 0 } else { page * TX_PAGE_SIZE + 1 };
+    let end_item = (start_item + TX_PAGE_SIZE - 1).min(count);
 
     rsx! {
         div {
-            class: "stats-bar",
-            span { "Total Transactions: " strong { "{txs.len()}" } }
-            span { class: "stats-divider", "|" }
-            span { "Transaction Knowledge: " code { "{TRANSACTIONS_KNOWLEDGE.read()}" } }
+            class: "tx-controls-bar",
+            div {
+                class: "tx-search-box",
+                input {
+                    r#type: "text",
+                    class: "search-input",
+                    placeholder: "Search transactions (payee, memo, category, amount, date)...",
+                    value: "{query_str}",
+                    oninput: {
+                        let load_page = load_page.clone();
+                        move |evt| {
+                            let val = evt.value();
+                            search_query.set(val.clone());
+                            load_page(0, val);
+                        }
+                    },
+                }
+                if !query_str.is_empty() {
+                    button {
+                        class: "btn-clear-search",
+                        title: "Clear search",
+                        onclick: {
+                            let load_page = load_page.clone();
+                            move |_| {
+                                search_query.set(String::new());
+                                load_page(0, String::new());
+                            }
+                        },
+                        "✕ Clear"
+                    }
+                }
+            }
+            div {
+                class: "stats-bar",
+                style: "margin: 0; padding: 6px 12px;",
+                span { "Total Transactions: " strong { "{count}" } }
+                span { class: "stats-divider", "|" }
+                span { "Knowledge: " code { "{TRANSACTIONS_KNOWLEDGE.read()}" } }
+            }
         }
 
-        if txs.is_empty() {
+        if !*has_loaded.read() && *is_loading.read() {
             div {
                 class: "empty-state-card",
-                p { class: "empty-title", "No Transactions Cached" }
-                p { class: "empty-description", "Transactions will load automatically from YNAB." }
+                p { class: "empty-title", "Loading transactions from database..." }
+            }
+        } else if count == 0 {
+            div {
+                class: "empty-state-card",
+                p {
+                    class: "empty-title",
+                    if query_str.is_empty() { "No Transactions Cached" } else { "No Matching Transactions" }
+                }
+                p {
+                    class: "empty-description",
+                    if query_str.is_empty() {
+                        "Transactions will load automatically from YNAB on sync."
+                    } else {
+                        "Try adjusting your search query."
+                    }
+                }
             }
         } else {
             div {
@@ -388,34 +529,95 @@ fn Transactions() -> Element {
                         }
                     }
                     tbody {
-                        for tx in txs.iter() {
-                            {
-                                let amount_dollars = (tx.amount as f64) / 1000.0;
-                                let amount_str = format!("${:.2}", amount_dollars);
-                                let payee_name = tx.payee_name.as_deref().unwrap_or("None");
-                                let category_name = tx.category_name.as_deref().unwrap_or("Uncategorized");
-                                let memo = tx.memo.as_deref().unwrap_or("");
-
-                                rsx! {
-                                    tr {
-                                        key: "{tx.id}",
-                                        td { "data-fieldname": "date", "{tx.date}" }
-                                        td { "data-fieldname": "amount", "{amount_str}" }
-                                        td { "data-fieldname": "payee_name", "{payee_name}" }
-                                        td { "data-fieldname": "category_name", "{category_name}" }
-                                        td { "data-fieldname": "memo", "{memo}" }
-                                        td { "data-fieldname": "cleared", "{tx.cleared}" }
-                                        td {
-                                            "data-fieldname": "approved",
-                                            span {
-                                                class: if tx.approved { "status-badge status-active" } else { "status-badge status-pending" },
-                                                if tx.approved { "Yes" } else { "No" }
-                                            }
-                                        }
+                        for (idx, slot) in pool.iter().enumerate() {
+                            tr {
+                                key: "{idx}",
+                                style: if !slot.visible { "display: none;" } else { "" },
+                                td { "data-fieldname": "date", "{slot.date}" }
+                                td { "data-fieldname": "amount", "{slot.amount_str}" }
+                                td { "data-fieldname": "payee_name", "{slot.payee_name}" }
+                                td { "data-fieldname": "category_name", "{slot.category_name}" }
+                                td { "data-fieldname": "memo", "{slot.memo}" }
+                                td { "data-fieldname": "cleared", "{slot.cleared}" }
+                                td {
+                                    "data-fieldname": "approved",
+                                    span {
+                                        class: if slot.approved { "status-badge status-active" } else { "status-badge status-pending" },
+                                        if slot.approved { "Yes" } else { "No" }
                                     }
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            div {
+                class: "pagination-bar",
+                div {
+                    class: "pagination-info",
+                    "Showing {start_item}–{end_item} of {count} transactions"
+                    if *is_loading.read() {
+                        span { style: "margin-left: 8px; color: #58a6ff;", "(Loading...)" }
+                    }
+                }
+                div {
+                    class: "pagination-controls",
+                    button {
+                        class: "btn-page",
+                        disabled: page == 0 || *is_loading.read(),
+                        onclick: {
+                            let load_page = load_page.clone();
+                            let q = query_str.clone();
+                            move |_| load_page(0, q.clone())
+                        },
+                        "«"
+                    }
+                    button {
+                        class: "btn-page",
+                        disabled: page == 0 || *is_loading.read(),
+                        onclick: {
+                            let load_page = load_page.clone();
+                            let q = query_str.clone();
+                            move |_| {
+                                if page > 0 {
+                                    load_page(page - 1, q.clone());
+                                }
+                            }
+                        },
+                        "‹"
+                    }
+                    span {
+                        class: "pagination-page-indicator",
+                        "Page {page + 1} of {pages}"
+                    }
+                    button {
+                        class: "btn-page",
+                        disabled: page + 1 >= pages || *is_loading.read(),
+                        onclick: {
+                            let load_page = load_page.clone();
+                            let q = query_str.clone();
+                            move |_| {
+                                if page + 1 < pages {
+                                    load_page(page + 1, q.clone());
+                                }
+                            }
+                        },
+                        "›"
+                    }
+                    button {
+                        class: "btn-page",
+                        disabled: page + 1 >= pages || *is_loading.read(),
+                        onclick: {
+                            let load_page = load_page.clone();
+                            let q = query_str.clone();
+                            move |_| {
+                                if pages > 0 {
+                                    load_page(pages - 1, q.clone());
+                                }
+                            }
+                        },
+                        "»"
                     }
                 }
             }
