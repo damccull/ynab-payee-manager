@@ -8,12 +8,12 @@ use serde_wasm_bindgen::{from_value, Serializer};
 use wasm_bindgen::JsValue;
 
 use crate::{
-    models::{ActionStatus, Payee, PayeeAction, PayeeReviewItem, ResponseData, Transaction},
+    models::{ActionStatus, IgnoredPair, Payee, PayeeAction, PayeeReviewItem, ResponseData, Transaction},
     settings::{
-        ACTION_QUEUE_STORE_NAME, DATABASE_NAME, DATABASE_VERSION, KNOWLEDGE_STORE_NAME,
-        PAYEES_STORE_NAME, PAYEE_REVIEW_QUEUE_STORE_NAME, SERVER_KNOWLEDGE_KEY_PAYEES,
-        SERVER_KNOWLEDGE_KEY_TRANSACTIONS, SETTINGS_KEY_TOKEN, SETTINGS_STORE_NAME,
-        TRANSACTIONS_STORE_NAME,
+        ACTION_QUEUE_STORE_NAME, DATABASE_NAME, DATABASE_VERSION, IGNORED_PAIRS_STORE_NAME,
+        KNOWLEDGE_STORE_NAME, PAYEES_STORE_NAME, PAYEE_REVIEW_QUEUE_STORE_NAME,
+        SERVER_KNOWLEDGE_KEY_PAYEES, SERVER_KNOWLEDGE_KEY_TRANSACTIONS, SETTINGS_KEY_TOKEN,
+        SETTINGS_STORE_NAME, TRANSACTIONS_STORE_NAME,
     },
     YnabToken,
 };
@@ -147,6 +147,28 @@ pub async fn create_database() -> Result<Database, DatabaseError> {
                     Some(payee_id_idx),
                 )
                 .map_err(|e| error!("unable to create payee_id index: {:#?}", e));
+        }
+
+        // Ensure 'ignored_pairs' object store exists
+        if !existing_stores.contains(&IGNORED_PAIRS_STORE_NAME.to_string()) {
+            let mut ignored_params = ObjectStoreParams::new();
+            ignored_params.auto_increment(false);
+            ignored_params.key_path(Some(KeyPath::new_single("id")));
+
+            let ignored_store = database
+                .create_object_store(IGNORED_PAIRS_STORE_NAME, ignored_params)
+                .map_err(|e| error!("unable to create ignored pairs store: {:#?}", e))
+                .expect("unable to create ignored pairs store");
+
+            let mut created_index = IndexParams::new();
+            created_index.unique(false);
+            let _ = ignored_store
+                .create_index(
+                    "created_at",
+                    KeyPath::new_single("created_at"),
+                    Some(created_index),
+                )
+                .map_err(|e| error!("unable to create created_at index on ignored pairs: {:#?}", e));
         }
     });
 
@@ -839,6 +861,72 @@ pub async fn get_next_action_sequence(database: &Database) -> Result<u64, Databa
     let all = get_all_actions(database).await?;
     let max_seq = all.iter().map(|a| a.sequence_number).max().unwrap_or(0);
     Ok(max_seq + 1)
+}
+
+// ----------------------------------------------------------------------------
+// Ignored Duplicate Pairs Database Operations
+// ----------------------------------------------------------------------------
+
+pub async fn save_ignored_pairs(
+    database: &Database,
+    pairs: &[IgnoredPair],
+) -> Result<(), DatabaseError> {
+    if pairs.is_empty() {
+        return Ok(());
+    }
+    let transaction = database.transaction(
+        &[IGNORED_PAIRS_STORE_NAME],
+        idb::TransactionMode::ReadWrite,
+    )?;
+    let store = transaction.object_store(IGNORED_PAIRS_STORE_NAME)?;
+
+    for pair in pairs {
+        let js_val = pair
+            .serialize(&Serializer::json_compatible())
+            .map_err(|e| anyhow::anyhow!("unable to serialize ignored pair: {:#?}", e))?;
+        store.put(&js_val, None)?.await?;
+    }
+    transaction.commit()?.await?;
+    Ok(())
+}
+
+pub async fn get_ignored_pairs(database: &Database) -> Result<Vec<IgnoredPair>, DatabaseError> {
+    let transaction = database.transaction(
+        &[IGNORED_PAIRS_STORE_NAME],
+        idb::TransactionMode::ReadOnly,
+    )?;
+    let store = transaction.object_store(IGNORED_PAIRS_STORE_NAME)?;
+
+    let stored = store.get_all(None, None)?.await?;
+    let mut items = stored
+        .into_iter()
+        .map(|val| {
+            serde_wasm_bindgen::from_value(val)
+                .map_err(|e| anyhow::anyhow!("unable to map ignored pair: {:#?}", e))
+        })
+        .collect::<anyhow::Result<Vec<IgnoredPair>>>()?;
+
+    transaction.await?;
+
+    // Sort newest first
+    items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(items)
+}
+
+pub async fn get_ignored_pair_ids(database: &Database) -> Result<HashSet<String>, DatabaseError> {
+    let pairs = get_ignored_pairs(database).await?;
+    Ok(pairs.into_iter().map(|p| p.id).collect())
+}
+
+pub async fn delete_ignored_pair(database: &Database, pair_id: &str) -> Result<(), DatabaseError> {
+    let transaction = database.transaction(
+        &[IGNORED_PAIRS_STORE_NAME],
+        idb::TransactionMode::ReadWrite,
+    )?;
+    let store = transaction.object_store(IGNORED_PAIRS_STORE_NAME)?;
+    store.delete(JsValue::from_str(pair_id))?.await?;
+    transaction.commit()?.await?;
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]

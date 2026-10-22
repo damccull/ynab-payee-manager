@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use strsim::jaro_winkler;
 
-use crate::models::{DuplicateGroup, Payee, PayeeCandidate};
+use crate::models::{DuplicateGroup, IgnoredPair, Payee, PayeeCandidate};
 
 /// Normalize and clean a payee name for fuzzy comparison.
 pub fn normalize_payee_name(name: &str) -> String {
@@ -125,12 +125,14 @@ pub fn pick_cleanest_name(payees: &[Payee]) -> String {
 /// Disjoint-set (Union-Find) structure for clustering indices.
 struct UnionFind {
     parent: Vec<usize>,
+    members: Vec<Vec<usize>>,
 }
 
 impl UnionFind {
     fn new(size: usize) -> Self {
         Self {
             parent: (0..size).collect(),
+            members: (0..size).map(|i| vec![i]).collect(),
         }
     }
 
@@ -144,12 +146,36 @@ impl UnionFind {
         }
     }
 
-    fn union(&mut self, i: usize, j: usize) {
+    fn try_union(
+        &mut self,
+        i: usize,
+        j: usize,
+        eligible_payees: &[&Payee],
+        ignored_pair_ids: &HashSet<String>,
+    ) -> bool {
         let root_i = self.find(i);
         let root_j = self.find(j);
-        if root_i != root_j {
-            self.parent[root_i] = root_j;
+        if root_i == root_j {
+            return true;
         }
+
+        // Check if any member of root_i is paired with any member of root_j as an ignored pair
+        if !ignored_pair_ids.is_empty() {
+            for &m_i in &self.members[root_i] {
+                for &m_j in &self.members[root_j] {
+                    let pair_id = IgnoredPair::make_id(&eligible_payees[m_i].id, &eligible_payees[m_j].id);
+                    if ignored_pair_ids.contains(&pair_id) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        // Merge root_i into root_j
+        self.parent[root_i] = root_j;
+        let mut moved_members = std::mem::take(&mut self.members[root_i]);
+        self.members[root_j].append(&mut moved_members);
+        true
     }
 }
 
@@ -158,6 +184,7 @@ impl UnionFind {
 pub fn find_duplicate_groups(
     payees: &[Payee],
     similarity_threshold: f64,
+    ignored_pair_ids: &HashSet<String>,
 ) -> Vec<DuplicateGroup> {
     // Filter out deleted payees and transfer payees
     let eligible_payees: Vec<&Payee> = payees
@@ -194,10 +221,14 @@ pub fn find_duplicate_groups(
 
     for indices in token_buckets.values() {
         if indices.len() > 1 {
-            let first = indices[0];
-            for &idx in &indices[1..] {
-                uf.union(first, idx);
-                match_reasons.insert((first.min(idx), first.max(idx)), "Exact Normalized Match".to_string());
+            for a in 0..indices.len() {
+                for b in (a + 1)..indices.len() {
+                    let i = indices[a];
+                    let j = indices[b];
+                    if uf.try_union(i, j, &eligible_payees, ignored_pair_ids) {
+                        match_reasons.insert((i.min(j), i.max(j)), "Exact Normalized Match".to_string());
+                    }
+                }
             }
         }
     }
@@ -232,17 +263,19 @@ pub fn find_duplicate_groups(
                     || (norm_j.len() >= 4 && norm_i.starts_with(norm_j));
 
                 if is_prefix {
-                    uf.union(i, j);
-                    match_reasons.insert((i.min(j), i.max(j)), "Prefix / Substring Match".to_string());
+                    if uf.try_union(i, j, &eligible_payees, ignored_pair_ids) {
+                        match_reasons.insert((i.min(j), i.max(j)), "Prefix / Substring Match".to_string());
+                    }
                     continue;
                 }
 
                 // Jaro-Winkler similarity
                 let sim = jaro_winkler(norm_i, norm_j);
                 if sim >= similarity_threshold {
-                    uf.union(i, j);
-                    let pct = (sim * 100.0).round() as u32;
-                    match_reasons.insert((i.min(j), i.max(j)), format!("Fuzzy Match ({}%)", pct));
+                    if uf.try_union(i, j, &eligible_payees, ignored_pair_ids) {
+                        let pct = (sim * 100.0).round() as u32;
+                        match_reasons.insert((i.min(j), i.max(j)), format!("Fuzzy Match ({}%)", pct));
+                    }
                 }
             }
         }
@@ -362,10 +395,56 @@ mod tests {
             },
         ];
 
-        let groups = find_duplicate_groups(&payees, 0.85);
+        let ignored = HashSet::new();
+        let groups = find_duplicate_groups(&payees, 0.85, &ignored);
         assert_eq!(groups.len(), 2);
         for group in &groups {
             assert!(group.candidates.iter().all(|c| c.is_checked));
+        }
+    }
+
+    #[test]
+    fn test_find_duplicate_groups_with_ignored_pairs() {
+        let payees = vec![
+            Payee {
+                id: "1".into(),
+                name: "Amazon".into(),
+                transfer_account_id: None,
+                deleted: false,
+            },
+            Payee {
+                id: "2".into(),
+                name: "Amazon Kids".into(),
+                transfer_account_id: None,
+                deleted: false,
+            },
+            Payee {
+                id: "3".into(),
+                name: "Amazon Prime".into(),
+                transfer_account_id: None,
+                deleted: false,
+            },
+            Payee {
+                id: "4".into(),
+                name: "Amazon Retail".into(),
+                transfer_account_id: None,
+                deleted: false,
+            },
+        ];
+
+        let mut ignored = HashSet::new();
+        // Ignore pairs (1, 2), (1, 3), (2, 3)
+        ignored.insert(IgnoredPair::make_id("1", "2"));
+        ignored.insert(IgnoredPair::make_id("1", "3"));
+        ignored.insert(IgnoredPair::make_id("2", "3"));
+
+        let groups = find_duplicate_groups(&payees, 0.85, &ignored);
+        // Amazon (1), Amazon Kids (2), and Amazon Prime (3) should NOT cluster with each other!
+        for g in &groups {
+            let ids: HashSet<String> = g.candidates.iter().map(|c| c.payee.id.clone()).collect();
+            assert!(!(ids.contains("1") && ids.contains("2")));
+            assert!(!(ids.contains("1") && ids.contains("3")));
+            assert!(!(ids.contains("2") && ids.contains("3")));
         }
     }
 }

@@ -119,3 +119,39 @@ pub struct DuplicateGroup {
     pub candidates: Vec<PayeeCandidate>,
     pub match_reason: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IgnoredPair {
+    pub id: String,
+    pub payee_id_1: String,
+    pub payee_name_1: String,
+    pub payee_id_2: String,
+    pub payee_name_2: String,
+    pub created_at: DateTime<Utc>,
+}
+
+impl IgnoredPair {
+    pub fn make_id(id_a: &str, id_b: &str) -> String {
+        if id_a <= id_b {
+            format!("{}:{}", id_a, id_b)
+        } else {
+            format!("{}:{}", id_b, id_a)
+        }
+    }
+
+    pub fn new(payee_1: &Payee, payee_2: &Payee) -> Self {
+        let (p1, p2) = if payee_1.id <= payee_2.id {
+            (payee_1, payee_2)
+        } else {
+            (payee_2, payee_1)
+        };
+        Self {
+            id: format!("{}:{}", p1.id, p2.id),
+            payee_id_1: p1.id.clone(),
+            payee_name_1: p1.name.clone(),
+            payee_id_2: p2.id.clone(),
+            payee_name_2: p2.name.clone(),
+            created_at: Utc::now(),
+        }
+    }
+}

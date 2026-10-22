@@ -1341,3 +1341,55 @@ tr.payee-row-struck .tx-count-zero {
     border-color: #58a6ff;
 }
 
+/* Duplicate Tabs & Ignored Pairs */
+.dup-tabs-bar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 8px;
+}
+
+.dup-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease-in-out;
+}
+
+.dup-tab:hover {
+    color: var(--text-primary);
+    background-color: var(--bg-hover);
+}
+
+.dup-tab.active {
+    color: #58a6ff;
+    background-color: rgba(56, 139, 253, 0.12);
+    border-color: rgba(56, 139, 253, 0.3);
+}
+
+.btn-outline-warning {
+    background-color: transparent;
+    border: 1px solid var(--accent-amber-border);
+    color: var(--accent-amber);
+}
+
+.btn-outline-warning:hover:not(:disabled) {
+    background-color: var(--accent-amber-bg);
+    border-color: var(--accent-amber);
+    color: #f0f6fc;
+}
+
+.btn-outline-warning:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
