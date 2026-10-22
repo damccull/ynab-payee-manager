@@ -4,7 +4,6 @@ use reqwest::header::HeaderMap;
 use crate::{
     database::{
         get_active_payee_ids, get_payees, get_transactions, replace_payees, replace_transactions,
-        upsert_payees, upsert_transactions,
     },
     models::{Payee, Transaction, TransactionsResponse, YnabResponse},
 };
@@ -13,8 +12,6 @@ pub async fn fetch_and_store_payees(
     db: &idb::Database,
     token_str: &str,
     budget: &str,
-    knowledge: u64,
-    delta: bool,
 ) -> Result<(Vec<Payee>, u64), String> {
     let httpclient = reqwest::Client::new();
     let mut headers = HeaderMap::new();
@@ -23,14 +20,7 @@ pub async fn fetch_and_store_payees(
         .map_err(|e| format!("Invalid auth header: {}", e))?;
     headers.insert("Authorization", auth_header);
 
-    let url = if delta && knowledge > 0 {
-        format!(
-            "https://api.ynab.com/v1/budgets/{}/payees?last_knowledge_of_server={}",
-            budget, knowledge
-        )
-    } else {
-        format!("https://api.ynab.com/v1/budgets/{}/payees", budget)
-    };
+    let url = format!("https://api.ynab.com/v1/budgets/{}/payees", budget);
 
     let response = httpclient
         .get(&url)
@@ -50,15 +40,9 @@ pub async fn fetch_and_store_payees(
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
 
-    if delta && knowledge > 0 {
-        upsert_payees(db, &ynabresponse.data.payees, ynabresponse.data.server_knowledge)
-            .await
-            .map_err(|e| format!("Failed to upsert payees in IndexedDB: {:?}", e))?;
-    } else {
-        replace_payees(db, &ynabresponse.data)
-            .await
-            .map_err(|e| format!("Failed to store payees in IndexedDB: {:?}", e))?;
-    }
+    replace_payees(db, &ynabresponse.data)
+        .await
+        .map_err(|e| format!("Failed to store payees in IndexedDB: {:?}", e))?;
 
     let (all_payees, k) = get_payees(db)
         .await
@@ -71,8 +55,6 @@ pub async fn fetch_and_store_transactions(
     db: &idb::Database,
     token_str: &str,
     budget: &str,
-    knowledge: u64,
-    delta: bool,
 ) -> Result<(Vec<Transaction>, u64, HashSet<String>), String> {
     let httpclient = reqwest::Client::new();
     let mut headers = HeaderMap::new();
@@ -81,14 +63,7 @@ pub async fn fetch_and_store_transactions(
         .map_err(|e| format!("Invalid auth header: {}", e))?;
     headers.insert("Authorization", auth_header);
 
-    let url = if delta && knowledge > 0 {
-        format!(
-            "https://api.ynab.com/v1/budgets/{}/transactions?last_knowledge_of_server={}",
-            budget, knowledge
-        )
-    } else {
-        format!("https://api.ynab.com/v1/budgets/{}/transactions", budget)
-    };
+    let url = format!("https://api.ynab.com/v1/budgets/{}/transactions", budget);
 
     let response = httpclient
         .get(&url)
@@ -108,15 +83,9 @@ pub async fn fetch_and_store_transactions(
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
 
-    if delta && knowledge > 0 {
-        upsert_transactions(db, &txresponse.data.transactions, txresponse.data.server_knowledge)
-            .await
-            .map_err(|e| format!("Failed to upsert transactions: {:?}", e))?;
-    } else {
-        replace_transactions(db, &txresponse.data.transactions, txresponse.data.server_knowledge)
-            .await
-            .map_err(|e| format!("Failed to replace transactions: {:?}", e))?;
-    }
+    replace_transactions(db, &txresponse.data.transactions, txresponse.data.server_knowledge)
+        .await
+        .map_err(|e| format!("Failed to replace transactions: {:?}", e))?;
 
     let (all_txs, k) = get_transactions(db)
         .await

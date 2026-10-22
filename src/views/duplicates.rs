@@ -93,7 +93,7 @@ pub fn Duplicates(
 ) -> Element {
     let db = use_context::<Arc<idb::Database>>();
 
-    let mut sensitivity = use_signal(|| 0.85f64);
+    let mut sensitivity = use_signal(|| 0.92f64);
     let mut search_query = use_signal(|| String::new());
     let mut groups = use_signal(Vec::<DuplicateGroup>::new);
     let is_scanning = use_signal(|| false);

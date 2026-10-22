@@ -205,14 +205,14 @@ fn Payees() -> Element {
                     if PAYEES_CACHE.read().is_empty() {
                         is_loading.set(true);
                         error_msg.set(None);
-                        if let Ok((payees, k)) = fetch_and_store_payees(&db, &t.to_string(), budget, 0, false).await {
+                        if let Ok((payees, k)) = fetch_and_store_payees(&db, &t.to_string(), budget).await {
                             *PAYEES_CACHE.write() = payees;
                             *PAYEES_KNOWLEDGE.write() = k;
                         }
                         is_loading.set(false);
                     }
                     if TRANSACTIONS_CACHE.read().is_empty() {
-                        let _ = fetch_and_store_transactions(&db, &t.to_string(), budget, 0, false).await;
+                        let _ = fetch_and_store_transactions(&db, &t.to_string(), budget).await;
                     }
                 }
             }
@@ -230,10 +230,8 @@ fn Payees() -> Element {
                     is_loading.set(true);
                     error_msg.set(None);
                     let budget = *BUDGET.read();
-                    let payee_k = *PAYEES_KNOWLEDGE.read();
-                    let tx_k = *TRANSACTIONS_KNOWLEDGE.read();
 
-                    match fetch_and_store_payees(&db, &t.to_string(), budget, payee_k, true).await {
+                    match fetch_and_store_payees(&db, &t.to_string(), budget).await {
                         Ok((payees, k)) => {
                             *PAYEES_CACHE.write() = payees;
                             *PAYEES_KNOWLEDGE.write() = k;
@@ -241,7 +239,7 @@ fn Payees() -> Element {
                         Err(e) => error_msg.set(Some(e)),
                     }
 
-                    if let Ok((txs, k, _)) = fetch_and_store_transactions(&db, &t.to_string(), budget, tx_k, true).await {
+                    if let Ok((txs, k, _)) = fetch_and_store_transactions(&db, &t.to_string(), budget).await {
                         *TRANSACTIONS_CACHE.write() = txs;
                         *TRANSACTIONS_KNOWLEDGE.write() = k;
                     }
@@ -408,8 +406,7 @@ fn Transactions() -> Element {
                     is_syncing.set(true);
                     error_msg.set(None);
                     let budget = *BUDGET.read();
-                    let tx_k = *TRANSACTIONS_KNOWLEDGE.read();
-                    match fetch_and_store_transactions(&db, &t.to_string(), budget, tx_k, true).await {
+                    match fetch_and_store_transactions(&db, &t.to_string(), budget).await {
                         Ok((txs, k, _)) => {
                             *TRANSACTIONS_CACHE.write() = txs;
                             *TRANSACTIONS_KNOWLEDGE.write() = k;

@@ -285,38 +285,6 @@ pub async fn get_payees(database: &Database) -> Result<(Vec<Payee>, u64), Databa
     Ok((stored_payees, knowledge))
 }
 
-pub async fn upsert_payees(
-    database: &Database,
-    payees: &[Payee],
-    server_knowledge: u64,
-) -> Result<(), DatabaseError> {
-    let transaction = database.transaction(
-        &[PAYEES_STORE_NAME, KNOWLEDGE_STORE_NAME],
-        idb::TransactionMode::ReadWrite,
-    )?;
-
-    let store = transaction.object_store(PAYEES_STORE_NAME)?;
-    for payee in payees {
-        if payee.deleted {
-            let _ = store.delete(JsValue::from_str(&payee.id))?.await;
-        } else {
-            let val = payee
-                .serialize(&Serializer::json_compatible())
-                .map_err(|e| anyhow::anyhow!("unable to serialize payee: {:#?}", e))?;
-            store.put(&val, None)?.await?;
-        }
-    }
-
-    let kstore = transaction.object_store(KNOWLEDGE_STORE_NAME)?;
-    let val = server_knowledge
-        .serialize(&Serializer::json_compatible())
-        .map_err(|e| anyhow::anyhow!("unable to serialize server_knowledge: {:#?}", e))?;
-    kstore.put(&val, Some(&JsValue::from_str(SERVER_KNOWLEDGE_KEY_PAYEES)))?.await?;
-
-    transaction.commit()?.await?;
-    Ok(())
-}
-
 pub async fn replace_transactions(
     database: &Database,
     txs: &[Transaction],
@@ -336,38 +304,6 @@ pub async fn replace_transactions(
                 .serialize(&Serializer::json_compatible())
                 .map_err(|e| anyhow::anyhow!("unable to serialize transaction: {:#?}", e))?;
             store.add(&val, None)?.await?;
-        }
-    }
-
-    let kstore = transaction.object_store(KNOWLEDGE_STORE_NAME)?;
-    let val = server_knowledge
-        .serialize(&Serializer::json_compatible())
-        .map_err(|e| anyhow::anyhow!("unable to serialize server_knowledge: {:#?}", e))?;
-    kstore.put(&val, Some(&JsValue::from_str(SERVER_KNOWLEDGE_KEY_TRANSACTIONS)))?.await?;
-
-    transaction.commit()?.await?;
-    Ok(())
-}
-
-pub async fn upsert_transactions(
-    database: &Database,
-    txs: &[Transaction],
-    server_knowledge: u64,
-) -> Result<(), DatabaseError> {
-    let transaction = database.transaction(
-        &[TRANSACTIONS_STORE_NAME, KNOWLEDGE_STORE_NAME],
-        idb::TransactionMode::ReadWrite,
-    )?;
-
-    let store = transaction.object_store(TRANSACTIONS_STORE_NAME)?;
-    for tx in txs {
-        if tx.deleted {
-            let _ = store.delete(JsValue::from_str(&tx.id))?.await;
-        } else {
-            let val = tx
-                .serialize(&Serializer::json_compatible())
-                .map_err(|e| anyhow::anyhow!("unable to serialize transaction: {:#?}", e))?;
-            store.put(&val, None)?.await?;
         }
     }
 

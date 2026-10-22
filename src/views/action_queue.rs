@@ -318,14 +318,12 @@ pub fn ActionQueue(
                 }
             }
 
-            // Run delta refresh for transactions and payees
+            // Run full refresh for transactions and payees
             if executed_count > 0 {
-                progress_message.set(Some("Performing delta sync with YNAB...".to_string()));
-                let tx_k = crate::database::get_transactions(&db).await.map(|(_, k)| k).unwrap_or(0);
-                let payee_k = crate::database::get_payees(&db).await.map(|(_, k)| k).unwrap_or(0);
+                progress_message.set(Some("Refreshing payees and transactions from YNAB...".to_string()));
 
-                let _ = crate::api::fetch_and_store_transactions(&db, &token_str, &budget, tx_k, true).await;
-                if let Ok((updated_payees, _)) = crate::api::fetch_and_store_payees(&db, &token_str, &budget, payee_k, true).await {
+                let _ = crate::api::fetch_and_store_transactions(&db, &token_str, &budget).await;
+                if let Ok((updated_payees, _)) = crate::api::fetch_and_store_payees(&db, &token_str, &budget).await {
                     *payees_cache.write() = updated_payees;
                 }
             }
@@ -333,7 +331,7 @@ pub fn ActionQueue(
             is_committing.set(false);
             progress_message.set(None);
             notification.set(Some(format!(
-                "Successfully committed and confirmed {} action(s) and synced delta state with YNAB!",
+                "Successfully committed and confirmed {} action(s) and refreshed data from YNAB!",
                 executed_count
             )));
 

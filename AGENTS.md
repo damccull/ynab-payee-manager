@@ -26,8 +26,8 @@ Client-side Single Page Application (SPA) built with Rust and [Dioxus 0.7](https
     - `payee_review_queue`: Stores pending `PayeeReviewItem` records awaiting user name confirmation.
     - `action_queue`: Stores queued `PayeeAction` records waiting to be committed to YNAB.
 - **API Communication**:
-  - Uses `reqwest` with JSON and WASM support to query `https://api.ynab.com/v1/budgets/default/payees` and `/transactions` with delta sync (`last_knowledge_of_server`).
-  - Responses update IndexedDB and in-memory global signals.
+  - Uses `reqwest` with JSON and WASM support to query `https://api.ynab.com/v1/budgets/default/payees` and `/transactions`.
+  - Full refreshes replace local records in IndexedDB and in-memory global signals.
 
 ---
 
@@ -51,14 +51,14 @@ The application is structured into the following components and routes in `src/m
   - Renders a table displaying Payee ID, Name, Transfer Account ID, and Deleted status.
 - **`Transactions` (`/transactions`)**:
   - Displays cached transactions stored in IndexedDB with date, payee, memo, amount, cleared, and approved status.
-  - Includes a manual "Sync Transactions" button with delta sync support.
+  - Includes a manual "Sync Transactions" button.
 - **`Duplicates` (`/duplicates`)**:
-  - Scans cached payees (excluding payees with 0 transactions and those already queued) using fuzzy string similarity clustering.
+  - Scans cached payees (excluding payees with 0 transactions and those already queued) using fuzzy string similarity clustering (defaulting to strict matching).
   - Allows selecting duplicate payees to combine and queuing them into the Payee Review Queue.
 - **`ReviewQueue` (`/review`)**:
   - Displays combined payees where the user can confirm or edit the suggested target name before pushing to the Action Queue.
 - **`ActionQueue` (`/queue`)**:
-  - Displays queued transactions updates and renames, with committing, clearing, and automatic delta refresh upon completion.
+  - Displays queued transactions updates and renames, with committing, clearing, and automatic full refresh upon completion.
 
 ---
 
