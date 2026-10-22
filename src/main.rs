@@ -62,6 +62,51 @@ fn remove_local_storage(key: &str) {
     }
 }
 
+fn get_last_sync_key(budget_id: &str) -> String {
+    format!("ynab_last_sync_{}", budget_id)
+}
+
+fn get_last_sync_timestamp(budget_id: &str) -> Option<i64> {
+    let key = get_last_sync_key(budget_id);
+    get_local_storage(&key).and_then(|val| val.parse::<i64>().ok())
+}
+
+fn set_last_sync_timestamp(budget_id: &str, timestamp: i64) {
+    let key = get_last_sync_key(budget_id);
+    set_local_storage(&key, &timestamp.to_string());
+}
+
+fn get_autosync_lock_key(budget_id: &str) -> String {
+    format!("ynab_autosync_lock_{}", budget_id)
+}
+
+fn get_autosync_lock_until(budget_id: &str) -> Option<i64> {
+    let key = get_autosync_lock_key(budget_id);
+    get_local_storage(&key).and_then(|val| val.parse::<i64>().ok())
+}
+
+fn set_autosync_lock(budget_id: &str, until_timestamp: i64) {
+    let key = get_autosync_lock_key(budget_id);
+    set_local_storage(&key, &until_timestamp.to_string());
+}
+
+fn clear_autosync_lock(budget_id: &str) {
+    let key = get_autosync_lock_key(budget_id);
+    remove_local_storage(&key);
+}
+
+fn is_autosync_locked(budget_id: &str) -> bool {
+    if let Some(until) = get_autosync_lock_until(budget_id) {
+        let now = chrono::Utc::now().timestamp();
+        now < until
+    } else {
+        false
+    }
+}
+
+const RATE_LIMIT_MESSAGE: &str =
+    "YNAB rate limit reached (429). Auto-sync is locked for 1 hour, but you are welcome to try a manual sync in the meantime.";
+
 fn do_login() {
     let auth_url = "https://app.ynab.com/oauth/authorize?client_id=Dszs-ubBjiUIP9pEHY7znF9LI_GrFdWSErx8zj84JWA&redirect_uri=http%3A%2F%2Flocalhost%3A8080&response_type=token&scope=";
     if let Some(window) = web_sys::window() {
@@ -267,6 +312,7 @@ async fn perform_sync(
     db: &Arc<idb::Database>,
     token_str: &str,
     budget: &str,
+    force_transactions: bool,
 ) {
     if *IS_SYNCING.peek() {
         debug!("Sync already in progress, waiting for previous sync to complete");
@@ -276,23 +322,60 @@ async fn perform_sync(
     *IS_SYNCING.write() = true;
     *SYNC_ERROR.write() = None;
 
-    match fetch_and_store_payees(db, token_str, budget).await {
+    // Immediately record the sync attempt timestamp so that even if it fails or errors,
+    // subsequent auto-syncs will wait until an hour is up.
+    set_last_sync_timestamp(budget, chrono::Utc::now().timestamp());
+
+    let mut had_error = false;
+    let mut rate_limited = false;
+
+    // 1. First do the payees
+    let payee_res = fetch_and_store_payees(db, token_str, budget).await;
+    let payee_server_knowledge = match payee_res {
         Ok((payees, pk)) => {
             *PAYEES_CACHE.write() = payees;
             *PAYEES_KNOWLEDGE.write() = pk;
+            Some(pk)
         }
         Err(e) => {
-            *SYNC_ERROR.write() = Some(format!("Payee sync failed: {}", e));
+            had_error = true;
+            if e.is_rate_limited() {
+                rate_limited = true;
+                let lock_until = chrono::Utc::now().timestamp() + 3600;
+                set_autosync_lock(budget, lock_until);
+                *SYNC_ERROR.write() = Some(RATE_LIMIT_MESSAGE.to_string());
+            } else {
+                *SYNC_ERROR.write() = Some(format!("Payee sync failed: {}", e));
+            }
+            None
         }
-    }
+    };
 
-    match fetch_and_store_transactions(db, token_str, budget).await {
-        Ok((txs, tk, _)) => {
-            *TRANSACTIONS_CACHE.write() = txs;
-            *TRANSACTIONS_KNOWLEDGE.write() = tk;
-        }
-        Err(e) => {
-            *SYNC_ERROR.write() = Some(format!("Transaction sync failed: {}", e));
+    // 2. Then, only if the transactions are missing or have an older knowledge do those (or if forced)
+    if !rate_limited {
+        let tx_missing = TRANSACTIONS_CACHE.peek().is_empty() && *TRANSACTIONS_KNOWLEDGE.peek() == 0;
+        let tx_older = payee_server_knowledge.map_or(false, |pk| *TRANSACTIONS_KNOWLEDGE.peek() < pk);
+
+        let should_sync_tx = force_transactions || tx_missing || tx_older;
+
+        if should_sync_tx {
+            let tx_res = fetch_and_store_transactions(db, token_str, budget).await;
+            match tx_res {
+                Ok((txs, tk, _)) => {
+                    *TRANSACTIONS_CACHE.write() = txs;
+                    *TRANSACTIONS_KNOWLEDGE.write() = tk;
+                }
+                Err(e) => {
+                    had_error = true;
+                    if e.is_rate_limited() {
+                        let lock_until = chrono::Utc::now().timestamp() + 3600;
+                        set_autosync_lock(budget, lock_until);
+                        *SYNC_ERROR.write() = Some(RATE_LIMIT_MESSAGE.to_string());
+                    } else {
+                        *SYNC_ERROR.write() = Some(format!("Transaction sync failed: {}", e));
+                    }
+                }
+            }
         }
     }
 
@@ -301,6 +384,11 @@ async fn perform_sync(
     }
     if let Ok(pending) = get_pending_actions(db).await {
         *ACTION_QUEUE_COUNT.write() = pending.len();
+    }
+
+    // If sync succeeded without error, remove any active autosync lock!
+    if !had_error {
+        clear_autosync_lock(budget);
     }
 
     *IS_SYNCING.write() = false;
@@ -344,7 +432,34 @@ fn AuthenticatedApp(db: DbHandle, initial_token: YnabToken, is_fresh_login: bool
 
             if token.is_valid() {
                 let budget = BUDGET.peek().clone();
-                perform_sync(&db, &token.to_string(), &budget).await;
+                let now = chrono::Utc::now().timestamp();
+                let last_sync = get_last_sync_timestamp(&budget);
+
+                // Auto-sync checks:
+                // 1. If previous sync is already in progress, wait/skip
+                if *IS_SYNCING.peek() {
+                    return;
+                }
+
+                // 2. Check if autosync is locked due to 429
+                if is_autosync_locked(&budget) {
+                    *SYNC_ERROR.write() = Some(RATE_LIMIT_MESSAGE.to_string());
+                    debug!("Auto-sync is locked due to 429 rate limit, skipping auto-sync");
+                    return;
+                }
+
+                // 3. Check last sync time first: if starting with token already in,
+                // only sync if it has been longer than an hour (3600s) or never synced before
+                if !is_fresh_login {
+                    if let Some(ts) = last_sync {
+                        if (now - ts) < 3600 {
+                            debug!("Skipping auto-sync: last sync was {}s ago (< 3600s)", now - ts);
+                            return;
+                        }
+                    }
+                }
+
+                perform_sync(&db, &token.to_string(), &budget, false).await;
             }
         });
     });
@@ -981,7 +1096,8 @@ fn Navbar() -> Element {
                             return;
                         }
                         let budget = BUDGET.peek().clone();
-                        perform_sync(&db, &t.to_string(), &budget).await;
+                        // Manual sync always does a fresh sync of both regardless of knowledge
+                        perform_sync(&db, &t.to_string(), &budget, true).await;
                     }
                 }
             });
