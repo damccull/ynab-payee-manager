@@ -35,6 +35,10 @@ pub struct Transaction {
     pub payee_name: Option<String>,
     pub category_id: Option<String>,
     pub category_name: Option<String>,
+    #[serde(default)]
+    pub transfer_account_id: Option<String>,
+    #[serde(default)]
+    pub transfer_transaction_id: Option<String>,
     pub deleted: bool,
 }
 

@@ -7,7 +7,7 @@ use ynab_payee_rs::{
     api::{fetch_and_store_payees, fetch_and_store_transactions},
     database::{
         create_database, get_payees, get_pending_actions, get_review_items, get_transactions,
-        nuke_database, search_transactions_paged,
+        nuke_database, search_transactions_paged, ProcessedTransaction,
     },
     models::{Payee, Transaction},
     views::{ActionQueue, Duplicates, ReviewQueue},
@@ -359,8 +359,11 @@ const TX_PAGE_SIZE: usize = 50;
 struct TransactionSlot {
     visible: bool,
     date: String,
-    amount_str: String,
-    is_negative: bool,
+    outflow_str: String,
+    has_outflow: bool,
+    inflow_str: String,
+    has_inflow: bool,
+    is_transfer: bool,
     payee_name: String,
     category_name: String,
     memo: String,
@@ -368,7 +371,7 @@ struct TransactionSlot {
     approved: bool,
 }
 
-fn update_slot_pool(pool: &mut Signal<Vec<TransactionSlot>>, items: &[Transaction]) {
+fn update_slot_pool(pool: &mut Signal<Vec<TransactionSlot>>, items: &[ProcessedTransaction]) {
     let mut guard = pool.write();
     for i in 0..TX_PAGE_SIZE {
         let slot = &mut guard[i];
@@ -377,23 +380,47 @@ fn update_slot_pool(pool: &mut Signal<Vec<TransactionSlot>>, items: &[Transactio
             slot.visible = true;
             slot.date.clear();
             slot.date.push_str(&tx.date);
-            slot.is_negative = tx.amount < 0;
-            slot.amount_str.clear();
-            let amount_dollars = (tx.amount.abs() as f64) / 1000.0;
+
             use std::fmt::Write;
-            if tx.amount < 0 {
-                let _ = write!(&mut slot.amount_str, "-${:.2}", amount_dollars);
+
+            slot.outflow_str.clear();
+            if let Some(outflow) = tx.outflow_milliunits {
+                slot.has_outflow = true;
+                let _ = write!(&mut slot.outflow_str, "${:.2}", (outflow as f64) / 1000.0);
             } else {
-                let _ = write!(&mut slot.amount_str, "${:.2}", amount_dollars);
+                slot.has_outflow = false;
+                slot.outflow_str.push('-');
             }
+
+            slot.inflow_str.clear();
+            if let Some(inflow) = tx.inflow_milliunits {
+                slot.has_inflow = true;
+                let _ = write!(&mut slot.inflow_str, "${:.2}", (inflow as f64) / 1000.0);
+            } else {
+                slot.has_inflow = false;
+                slot.inflow_str.push('-');
+            }
+
+            slot.is_transfer = tx.is_transfer;
+
             slot.payee_name.clear();
-            slot.payee_name.push_str(tx.payee_name.as_deref().unwrap_or("None"));
+            if let Some(ref p) = tx.payee_name {
+                slot.payee_name.push_str(p);
+            }
+
             slot.category_name.clear();
-            slot.category_name.push_str(tx.category_name.as_deref().unwrap_or("Uncategorized"));
+            if let Some(ref c) = tx.category_name {
+                slot.category_name.push_str(c);
+            }
+
             slot.memo.clear();
-            slot.memo.push_str(tx.memo.as_deref().unwrap_or(""));
+            if let Some(ref m) = tx.memo {
+                slot.memo.push_str(m);
+            }
+
             slot.cleared.clear();
             slot.cleared.push_str(&tx.cleared);
+
             slot.approved = tx.approved;
         } else {
             slot.visible = false;
@@ -597,7 +624,8 @@ fn Transactions() -> Element {
                     thead {
                         tr {
                             th { "Date" }
-                            th { "Amount" }
+                            th { class: "th-amount", "Outflow" }
+                            th { class: "th-amount", "Inflow" }
                             th { "Payee Name" }
                             th { "Category" }
                             th { "Memo" }
@@ -612,12 +640,47 @@ fn Transactions() -> Element {
                                 style: if !slot.visible { "display: none;" } else { "" },
                                 td { "data-fieldname": "date", "{slot.date}" }
                                 td {
-                                    "data-fieldname": "amount",
-                                    class: if slot.is_negative { "amount-negative" } else { "amount-positive" },
-                                    "{slot.amount_str}"
+                                    "data-fieldname": "outflow",
+                                    class: if slot.has_outflow { "amount-outflow" } else { "amount-empty" },
+                                    "{slot.outflow_str}"
                                 }
-                                td { "data-fieldname": "payee_name", "{slot.payee_name}" }
-                                td { "data-fieldname": "category_name", "{slot.category_name}" }
+                                td {
+                                    "data-fieldname": "inflow",
+                                    class: if slot.has_inflow { "amount-inflow" } else { "amount-empty" },
+                                    "{slot.inflow_str}"
+                                }
+                                td {
+                                    "data-fieldname": "payee_name",
+                                    if slot.is_transfer {
+                                        span {
+                                            class: "transfer-unit",
+                                            title: "account-to-account transfer",
+                                            span {
+                                                class: "transfer-icon",
+                                                title: "account-to-account transfer",
+                                                "⇄"
+                                            }
+                                            span {
+                                                class: "transfer-label",
+                                                "Transfer"
+                                            }
+                                        }
+                                    } else if slot.payee_name.is_empty() {
+                                        span { class: "text-muted", "None" }
+                                    } else {
+                                        "{slot.payee_name}"
+                                    }
+                                }
+                                td {
+                                    "data-fieldname": "category_name",
+                                    if slot.is_transfer {
+                                        span { class: "text-muted", "-" }
+                                    } else if slot.category_name.is_empty() {
+                                        span { class: "text-muted", "Uncategorized" }
+                                    } else {
+                                        "{slot.category_name}"
+                                    }
+                                }
                                 td { "data-fieldname": "memo", "{slot.memo}" }
                                 td { "data-fieldname": "cleared", "{slot.cleared}" }
                                 td {

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 use dioxus::prelude::{debug, error, trace};
@@ -353,8 +353,22 @@ pub async fn get_transactions(
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ProcessedTransaction {
+    pub id: String,
+    pub date: String,
+    pub outflow_milliunits: Option<u64>,
+    pub inflow_milliunits: Option<u64>,
+    pub payee_name: Option<String>,
+    pub category_name: Option<String>,
+    pub memo: Option<String>,
+    pub cleared: String,
+    pub approved: bool,
+    pub is_transfer: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PagedTransactions {
-    pub items: Vec<Transaction>,
+    pub items: Vec<ProcessedTransaction>,
     pub total_count: usize,
     pub current_page: usize,
     pub page_size: usize,
@@ -371,6 +385,116 @@ pub async fn get_transactions_count(database: &Database) -> Result<usize, Databa
     Ok(count as usize)
 }
 
+pub fn process_and_pair_transactions(
+    txs: impl IntoIterator<Item = Transaction>,
+) -> Vec<ProcessedTransaction> {
+    let active_txs: Vec<Transaction> = txs.into_iter().filter(|tx| !tx.deleted).collect();
+
+    // Map id -> index in active_txs
+    let mut id_map: HashMap<&str, usize> = HashMap::with_capacity(active_txs.len());
+    for (idx, tx) in active_txs.iter().enumerate() {
+        id_map.insert(tx.id.as_str(), idx);
+    }
+
+    let mut paired_indices: HashSet<usize> = HashSet::with_capacity(active_txs.len());
+    let mut processed = Vec::with_capacity(active_txs.len());
+
+    for (idx, tx) in active_txs.iter().enumerate() {
+        if paired_indices.contains(&idx) {
+            continue;
+        }
+
+        // Check if this transaction has a transfer partner
+        if let Some(ref partner_id) = tx.transfer_transaction_id {
+            if !partner_id.is_empty() && partner_id != &tx.id {
+                if let Some(&partner_idx) = id_map.get(partner_id.as_str()) {
+                    if partner_idx != idx && !paired_indices.contains(&partner_idx) {
+                        let partner = &active_txs[partner_idx];
+                        paired_indices.insert(idx);
+                        paired_indices.insert(partner_idx);
+
+                        let abs_amount = if tx.amount != 0 {
+                            tx.amount.abs() as u64
+                        } else {
+                            partner.amount.abs() as u64
+                        };
+
+                        let (outflow, inflow) = if abs_amount > 0 {
+                            (Some(abs_amount), Some(abs_amount))
+                        } else {
+                            (None, None)
+                        };
+
+                        let date = if tx.date >= partner.date {
+                            tx.date.clone()
+                        } else {
+                            partner.date.clone()
+                        };
+
+                        let memo = match (&tx.memo, &partner.memo) {
+                            (Some(m1), Some(m2)) if !m1.is_empty() && !m2.is_empty() && m1 != m2 => {
+                                Some(format!("{} | {}", m1, m2))
+                            }
+                            (Some(m1), _) if !m1.is_empty() => Some(m1.clone()),
+                            (_, Some(m2)) if !m2.is_empty() => Some(m2.clone()),
+                            _ => None,
+                        };
+
+                        let cleared = if tx.cleared == "reconciled" && partner.cleared == "reconciled" {
+                            "reconciled".to_string()
+                        } else if tx.cleared == "uncleared" && partner.cleared == "uncleared" {
+                            "uncleared".to_string()
+                        } else {
+                            "cleared".to_string()
+                        };
+
+                        let approved = tx.approved && partner.approved;
+
+                        processed.push(ProcessedTransaction {
+                            id: format!("{}:{}", tx.id, partner.id),
+                            date,
+                            outflow_milliunits: outflow,
+                            inflow_milliunits: inflow,
+                            payee_name: None,
+                            category_name: None,
+                            memo,
+                            cleared,
+                            approved,
+                            is_transfer: true,
+                        });
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // Single transaction (non-transfer or unpaired transfer)
+        let is_transfer = tx.transfer_account_id.is_some() || tx.transfer_transaction_id.is_some();
+        let (outflow, inflow) = if tx.amount < 0 {
+            (Some(tx.amount.abs() as u64), None)
+        } else if tx.amount > 0 {
+            (None, Some(tx.amount as u64))
+        } else {
+            (None, None)
+        };
+
+        processed.push(ProcessedTransaction {
+            id: tx.id.clone(),
+            date: tx.date.clone(),
+            outflow_milliunits: outflow,
+            inflow_milliunits: inflow,
+            payee_name: if is_transfer { None } else { tx.payee_name.clone() },
+            category_name: if is_transfer { None } else { tx.category_name.clone() },
+            memo: tx.memo.clone(),
+            cleared: tx.cleared.clone(),
+            approved: tx.approved,
+            is_transfer,
+        });
+    }
+
+    processed
+}
+
 pub fn filter_and_page_transactions(
     txs: impl IntoIterator<Item = Transaction>,
     query: &str,
@@ -380,12 +504,11 @@ pub fn filter_and_page_transactions(
     let query_trimmed = query.trim().to_lowercase();
     let has_query = !query_trimmed.is_empty();
 
-    let mut all_txs: Vec<Transaction> = txs
+    let processed = process_and_pair_transactions(txs);
+
+    let mut filtered: Vec<ProcessedTransaction> = processed
         .into_iter()
         .filter(|tx| {
-            if tx.deleted {
-                return false;
-            }
             if !has_query {
                 return true;
             }
@@ -393,15 +516,17 @@ pub fn filter_and_page_transactions(
                 || tx.payee_name.as_deref().unwrap_or("").to_lowercase().contains(&query_trimmed)
                 || tx.category_name.as_deref().unwrap_or("").to_lowercase().contains(&query_trimmed)
                 || tx.memo.as_deref().unwrap_or("").to_lowercase().contains(&query_trimmed)
-                || format!("{:.2}", (tx.amount as f64) / 1000.0).contains(&query_trimmed)
+                || (tx.is_transfer && ("transfer".contains(&query_trimmed) || "account-to-account".contains(&query_trimmed)))
+                || tx.outflow_milliunits.is_some_and(|m| format!("{:.2}", (m as f64) / 1000.0).contains(&query_trimmed))
+                || tx.inflow_milliunits.is_some_and(|m| format!("{:.2}", (m as f64) / 1000.0).contains(&query_trimmed))
                 || tx.cleared.to_lowercase().contains(&query_trimmed)
         })
         .collect();
 
-    // Sort newest to oldest
-    all_txs.sort_by(|a, b| b.date.cmp(&a.date));
+    // Sort newest to oldest, tie-breaking by ID
+    filtered.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| b.id.cmp(&a.id)));
 
-    let total_count = all_txs.len();
+    let total_count = filtered.len();
     let total_pages = if total_count == 0 {
         1
     } else {
@@ -412,7 +537,7 @@ pub fn filter_and_page_transactions(
     let end = (start + page_size).min(total_count);
 
     let items = if start < end {
-        all_txs[start..end].to_vec()
+        filtered[start..end].to_vec()
     } else {
         Vec::new()
     };
@@ -682,6 +807,8 @@ mod tests {
             payee_name: Some(payee.to_string()),
             category_id: None,
             category_name: Some("Dining".to_string()),
+            transfer_account_id: None,
+            transfer_transaction_id: None,
             deleted: false,
         }
     }
@@ -754,5 +881,48 @@ mod tests {
         let paged = filter_and_page_transactions(vec![tx1, tx2], "", 0, 10);
         assert_eq!(paged.total_count, 1);
         assert_eq!(paged.items[0].id, "1");
+    }
+
+    #[test]
+    fn test_process_and_pair_transfer_transactions() {
+        let mut tx_out = make_test_tx("tx1", "2024-05-01", "Transfer : Savings", -100000, "Savings transfer");
+        tx_out.transfer_account_id = Some("acc_savings".to_string());
+        tx_out.transfer_transaction_id = Some("tx2".to_string());
+
+        let mut tx_in = make_test_tx("tx2", "2024-05-01", "Transfer : Checking", 100000, "Savings transfer");
+        tx_in.transfer_account_id = Some("acc_checking".to_string());
+        tx_in.transfer_transaction_id = Some("tx1".to_string());
+
+        let normal_tx = make_test_tx("tx3", "2024-05-02", "Grocery Store", -45000, "Food");
+
+        let paged = filter_and_page_transactions(vec![tx_out, tx_in, normal_tx], "", 0, 10);
+        assert_eq!(paged.total_count, 2);
+
+        // First item should be tx3 (2024-05-02)
+        assert_eq!(paged.items[0].id, "tx3");
+        assert_eq!(paged.items[0].is_transfer, false);
+        assert_eq!(paged.items[0].outflow_milliunits, Some(45000));
+        assert_eq!(paged.items[0].inflow_milliunits, None);
+
+        // Second item should be the paired transfer (2024-05-01)
+        assert_eq!(paged.items[1].is_transfer, true);
+        assert_eq!(paged.items[1].outflow_milliunits, Some(100000));
+        assert_eq!(paged.items[1].inflow_milliunits, Some(100000));
+        assert_eq!(paged.items[1].memo.as_deref(), Some("Savings transfer"));
+    }
+
+    #[test]
+    fn test_search_transfer_unit() {
+        let mut tx_out = make_test_tx("tx1", "2024-05-01", "Transfer : Savings", -100000, "");
+        tx_out.transfer_transaction_id = Some("tx2".to_string());
+        let mut tx_in = make_test_tx("tx2", "2024-05-01", "Transfer : Checking", 100000, "");
+        tx_in.transfer_transaction_id = Some("tx1".to_string());
+
+        let paged = filter_and_page_transactions(vec![tx_out.clone(), tx_in.clone()], "transfer", 0, 10);
+        assert_eq!(paged.total_count, 1);
+        assert_eq!(paged.items[0].is_transfer, true);
+
+        let paged_acct = filter_and_page_transactions(vec![tx_out, tx_in], "account-to-account", 0, 10);
+        assert_eq!(paged_acct.total_count, 1);
     }
 }

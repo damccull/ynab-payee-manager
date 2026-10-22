@@ -340,18 +340,62 @@ td[data-fieldname="date"] {
     color: var(--text-secondary);
 }
 
+th.th-amount,
+td[data-fieldname="outflow"],
+td[data-fieldname="inflow"] {
+    text-align: right;
+}
+
+td[data-fieldname="outflow"],
+td[data-fieldname="inflow"],
 td[data-fieldname="amount"] {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     font-weight: 600;
-    color: var(--text-primary);
 }
 
+.amount-outflow,
 .amount-negative {
     color: var(--accent-red) !important;
 }
 
+.amount-inflow,
 .amount-positive {
     color: var(--text-primary);
+}
+
+.amount-empty {
+    color: var(--text-muted);
+    font-weight: 400;
+}
+
+.transfer-unit {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background-color: rgba(56, 139, 253, 0.12);
+    border: 1px solid rgba(56, 139, 253, 0.3);
+    color: #58a6ff;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: default;
+    user-select: none;
+}
+
+.transfer-icon {
+    font-size: 14px;
+    font-weight: bold;
+    color: #58a6ff;
+}
+
+.transfer-label {
+    font-size: 12px;
+    color: #58a6ff;
+}
+
+.text-muted {
+    color: var(--text-muted);
 }
 
 /* Status Badges */
