@@ -1062,8 +1062,26 @@ td[data-fieldname="amount"] {
     border: 1px solid var(--border-color);
     border-radius: 8px;
     padding: 10px 16px;
-    margin-top: 16px;
+    margin-top: 14px;
+    margin-bottom: 14px;
+}
+
+.top-pagination-bar {
+    margin-top: 0;
+    margin-bottom: 14px;
+}
+
+.bottom-pagination-bar {
+    margin-top: 14px;
     margin-bottom: 24px;
+}
+
+.sticky-bottom {
+    position: sticky;
+    bottom: 12px;
+    z-index: 20;
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(8px);
 }
 
 .pagination-info {

@@ -395,6 +395,90 @@ fn update_slot_pool(pool: &mut Signal<Vec<TransactionSlot>>, items: &[Transactio
     }
 }
 
+fn scroll_to_top() {
+    if let Some(window) = web_sys::window() {
+        window.scroll_to_with_x_and_y(0.0, 0.0);
+    }
+}
+
+#[component]
+fn PagerBar(
+    page: usize,
+    pages: usize,
+    count: usize,
+    is_loading: bool,
+    start_item: usize,
+    end_item: usize,
+    class_extra: &'static str,
+    on_page_change: EventHandler<usize>,
+) -> Element {
+    rsx! {
+        div {
+            class: "pagination-bar {class_extra}",
+            div {
+                class: "pagination-info",
+                "Showing {start_item}–{end_item} of {count} transactions"
+                if is_loading {
+                    span { style: "margin-left: 8px; color: #58a6ff;", "(Loading...)" }
+                }
+            }
+            div {
+                class: "pagination-controls",
+                button {
+                    class: "btn-page",
+                    disabled: page == 0 || is_loading,
+                    title: "First page",
+                    onclick: move |_| {
+                        scroll_to_top();
+                        on_page_change.call(0);
+                    },
+                    "«"
+                }
+                button {
+                    class: "btn-page",
+                    disabled: page == 0 || is_loading,
+                    title: "Previous page",
+                    onclick: move |_| {
+                        if page > 0 {
+                            scroll_to_top();
+                            on_page_change.call(page - 1);
+                        }
+                    },
+                    "‹"
+                }
+                span {
+                    class: "pagination-page-indicator",
+                    "Page {page + 1} of {pages}"
+                }
+                button {
+                    class: "btn-page",
+                    disabled: page + 1 >= pages || is_loading,
+                    title: "Next page",
+                    onclick: move |_| {
+                        if page + 1 < pages {
+                            scroll_to_top();
+                            on_page_change.call(page + 1);
+                        }
+                    },
+                    "›"
+                }
+                button {
+                    class: "btn-page",
+                    disabled: page + 1 >= pages || is_loading,
+                    title: "Last page",
+                    onclick: move |_| {
+                        if pages > 0 {
+                            scroll_to_top();
+                            on_page_change.call(pages - 1);
+                        }
+                    },
+                    "»"
+                }
+            }
+        }
+    }
+}
+
 /// Transaction Page
 #[component]
 fn Transactions() -> Element {
@@ -514,6 +598,22 @@ fn Transactions() -> Element {
                 }
             }
         } else {
+            // Top Pager Bar
+            PagerBar {
+                page,
+                pages,
+                count,
+                is_loading: *is_loading.read(),
+                start_item,
+                end_item,
+                class_extra: "top-pagination-bar",
+                on_page_change: {
+                    let load_page = load_page.clone();
+                    let q = query_str.clone();
+                    move |new_page| load_page(new_page, q.clone())
+                },
+            }
+
             div {
                 class: "table-container",
                 table {
@@ -552,74 +652,20 @@ fn Transactions() -> Element {
                 }
             }
 
-            div {
-                class: "pagination-bar",
-                div {
-                    class: "pagination-info",
-                    "Showing {start_item}–{end_item} of {count} transactions"
-                    if *is_loading.read() {
-                        span { style: "margin-left: 8px; color: #58a6ff;", "(Loading...)" }
-                    }
-                }
-                div {
-                    class: "pagination-controls",
-                    button {
-                        class: "btn-page",
-                        disabled: page == 0 || *is_loading.read(),
-                        onclick: {
-                            let load_page = load_page.clone();
-                            let q = query_str.clone();
-                            move |_| load_page(0, q.clone())
-                        },
-                        "«"
-                    }
-                    button {
-                        class: "btn-page",
-                        disabled: page == 0 || *is_loading.read(),
-                        onclick: {
-                            let load_page = load_page.clone();
-                            let q = query_str.clone();
-                            move |_| {
-                                if page > 0 {
-                                    load_page(page - 1, q.clone());
-                                }
-                            }
-                        },
-                        "‹"
-                    }
-                    span {
-                        class: "pagination-page-indicator",
-                        "Page {page + 1} of {pages}"
-                    }
-                    button {
-                        class: "btn-page",
-                        disabled: page + 1 >= pages || *is_loading.read(),
-                        onclick: {
-                            let load_page = load_page.clone();
-                            let q = query_str.clone();
-                            move |_| {
-                                if page + 1 < pages {
-                                    load_page(page + 1, q.clone());
-                                }
-                            }
-                        },
-                        "›"
-                    }
-                    button {
-                        class: "btn-page",
-                        disabled: page + 1 >= pages || *is_loading.read(),
-                        onclick: {
-                            let load_page = load_page.clone();
-                            let q = query_str.clone();
-                            move |_| {
-                                if pages > 0 {
-                                    load_page(pages - 1, q.clone());
-                                }
-                            }
-                        },
-                        "»"
-                    }
-                }
+            // Bottom Sticky Pager Bar
+            PagerBar {
+                page,
+                pages,
+                count,
+                is_loading: *is_loading.read(),
+                start_item,
+                end_item,
+                class_extra: "bottom-pagination-bar sticky-bottom",
+                on_page_change: {
+                    let load_page = load_page.clone();
+                    let q = query_str.clone();
+                    move |new_page| load_page(new_page, q.clone())
+                },
             }
         }
     }
