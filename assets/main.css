@@ -353,9 +353,12 @@ td[data-fieldname="amount"] {
     font-weight: 600;
 }
 
-.amount-outflow,
+.amount-outflow {
+    color: #ffffff;
+}
+
 .amount-negative {
-    color: var(--accent-red) !important;
+    color: var(--accent-red);
 }
 
 .amount-inflow,
