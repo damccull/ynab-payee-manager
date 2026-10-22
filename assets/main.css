@@ -78,6 +78,19 @@ body {
     color: var(--text-primary);
 }
 
+.btn-signout {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-left: 8px;
+    transition: all 0.15s ease-in-out;
+}
+
 /* Warning Banner */
 .warning-banner {
     display: flex;

@@ -5,7 +5,10 @@ use wasm_bindgen::JsValue;
 
 use ynab_payee_rs::{
     api::{fetch_and_store_payees, fetch_and_store_transactions},
-    database::{create_database, get_payees, get_pending_actions, get_review_items, get_transactions},
+    database::{
+        create_database, get_payees, get_pending_actions, get_review_items, get_transactions,
+        nuke_database,
+    },
     models::{Payee, Transaction},
     views::{ActionQueue, Duplicates, ReviewQueue},
     AuthActions, AuthActionStatus,
@@ -501,8 +504,36 @@ fn Transactions() -> Element {
 /// Shared navbar component.
 #[component]
 fn Navbar() -> Element {
+    let db = use_context::<Arc<idb::Database>>();
+    let mut auth = use_context::<AuthActions>();
     let review_cnt = *REVIEW_QUEUE_COUNT.read();
     let action_cnt = *ACTION_QUEUE_COUNT.read();
+
+    let sign_out = {
+        let db = db.clone();
+        move |_| {
+            let db = db.clone();
+            spawn(async move {
+                // Clear in-memory token and caches
+                auth.token.set(None);
+                *PAYEES_CACHE.write() = Vec::new();
+                *PAYEES_KNOWLEDGE.write() = 0;
+                *TRANSACTIONS_CACHE.write() = Vec::new();
+                *TRANSACTIONS_KNOWLEDGE.write() = 0;
+                *REVIEW_QUEUE_COUNT.write() = 0;
+                *ACTION_QUEUE_COUNT.write() = 0;
+
+                // Nuke database in IndexedDB
+                let _ = nuke_database(&db).await;
+
+                // Force a complete browser refresh at root
+                if let Some(window) = web_sys::window() {
+                    let _ = window.location().replace("/");
+                    let _ = window.location().reload();
+                }
+            });
+        }
+    };
 
     rsx! {
         header {
@@ -543,6 +574,12 @@ fn Navbar() -> Element {
                     to: Route::Transactions {},
                     class: "nav-link",
                     "Transactions"
+                }
+                button {
+                    class: "btn-signout btn-outline-danger",
+                    title: "Nuke database and sign out",
+                    onclick: sign_out,
+                    "Sign Out"
                 }
             }
         }

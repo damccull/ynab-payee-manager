@@ -153,6 +153,13 @@ pub async fn create_database() -> Result<Database, DatabaseError> {
     Ok(open_request.await?)
 }
 
+pub async fn nuke_database(database: &Database) -> Result<(), DatabaseError> {
+    database.close();
+    let factory = Factory::new()?;
+    factory.delete(DATABASE_NAME)?.await?;
+    Ok(())
+}
+
 pub async fn store_ynab_token(
     database: &Database,
     token: YnabToken,
