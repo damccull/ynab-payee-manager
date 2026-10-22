@@ -57,23 +57,24 @@ async fn run_scan(
 
     let active_ids = get_active_payee_ids(&db).await.unwrap_or_default();
     let filter_zero_tx = !active_ids.is_empty();
-
-    let cache = payees_cache.read();
-    let unqueued_payees: Vec<crate::models::Payee> = cache
-        .iter()
-        .filter(|p| {
-            if queued_ids.contains(&p.id) {
-                return false;
-            }
-            if filter_zero_tx && !active_ids.contains(&p.id) {
-                return false;
-            }
-            true
-        })
-        .cloned()
-        .collect();
-
     let ignored_pair_ids = get_ignored_pair_ids(&db).await.unwrap_or_default();
+
+    let unqueued_payees: Vec<crate::models::Payee> = {
+        let cache = payees_cache.cloned();
+        cache
+            .into_iter()
+            .filter(|p| {
+                if queued_ids.contains(&p.id) {
+                    return false;
+                }
+                if filter_zero_tx && !active_ids.contains(&p.id) {
+                    return false;
+                }
+                true
+            })
+            .collect()
+    };
+
     let found_groups = find_duplicate_groups(&unqueued_payees, thresh, &ignored_pair_ids);
     let total_candidates: usize = found_groups.iter().map(|g| g.candidates.len()).sum();
     groups.set(found_groups);
