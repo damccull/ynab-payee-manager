@@ -5,8 +5,45 @@ use crate::{
     database::{
         get_active_payee_ids, get_payees, get_transactions, replace_payees, replace_transactions,
     },
-    models::{Payee, Transaction, TransactionsResponse, YnabResponse},
+    models::{BudgetSummary, BudgetsResponse, Payee, Transaction, TransactionsResponse, YnabResponse},
 };
+
+pub async fn fetch_default_budget(token_str: &str) -> Result<BudgetSummary, String> {
+    let httpclient = reqwest::Client::new();
+    let mut headers = HeaderMap::new();
+    let auth_header = format!("Bearer {}", token_str)
+        .parse()
+        .map_err(|e| format!("Invalid auth header: {}", e))?;
+    headers.insert("Authorization", auth_header);
+
+    let url = "https://api.ynab.com/v1/budgets";
+
+    let response = httpclient
+        .get(url)
+        .headers(headers)
+        .send()
+        .await
+        .map_err(|e| format!("Network request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("YNAB API error {}: {}", status, body));
+    }
+
+    let budgets_resp: BudgetsResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse budgets response: {}", e))?;
+
+    if let Some(default_budget) = budgets_resp.data.default_budget {
+        Ok(default_budget)
+    } else if let Some(first_budget) = budgets_resp.data.budgets.into_iter().next() {
+        Ok(first_budget)
+    } else {
+        Err("No budgets found in your YNAB account".to_string())
+    }
+}
 
 pub async fn fetch_and_store_payees(
     db: &idb::Database,

@@ -30,6 +30,7 @@ web-sys = { version = "0.3.85", features = [
   "Location",
   "UrlSearchParams",
   "History",
+  "Storage",
 ] }
 strsim = "0.11"
 uuid = { version = "1.10", features = ["v4", "js", "serde"] }

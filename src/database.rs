@@ -18,10 +18,23 @@ use crate::{
     YnabToken,
 };
 
+pub fn budget_database_name(budget_id: &str) -> String {
+    format!("ynab-budget-{}", budget_id)
+}
+
+pub async fn create_database_for_budget(budget_id: &str) -> Result<Database, DatabaseError> {
+    let name = budget_database_name(budget_id);
+    create_database_with_name(&name).await
+}
+
 pub async fn create_database() -> Result<Database, DatabaseError> {
+    create_database_with_name(DATABASE_NAME).await
+}
+
+pub async fn create_database_with_name(name: &str) -> Result<Database, DatabaseError> {
     let factory = Factory::new()?;
     let mut open_request = factory
-        .open(DATABASE_NAME, Some(DATABASE_VERSION))
+        .open(name, Some(DATABASE_VERSION))
         .expect("unable to open database");
 
     // Add an upgrade handler for the database
@@ -256,19 +269,14 @@ pub async fn replace_payees(
 
     let kstore = transaction.object_store(KNOWLEDGE_STORE_NAME)?;
 
-    kstore.clear()?.await?;
+    let val = data
+        .server_knowledge
+        .serialize(&Serializer::json_compatible())
+        .map_err(|e| anyhow::anyhow!("unable to serialize server_knowledge: {:#?}", e))?;
 
     let knowledge = kstore
-        .add(
-            &data
-                .server_knowledge
-                .serialize(&Serializer::json_compatible())
-                .map_err(|e| anyhow::anyhow!("unable to serialize server_knowledge: {:#?}", e))?,
-            Some(&JsValue::from_str(SERVER_KNOWLEDGE_KEY_PAYEES)),
-        )?
+        .put(&val, Some(&JsValue::from_str(SERVER_KNOWLEDGE_KEY_PAYEES)))?
         .await?;
-
-    debug!("added server knowledge: {:#?}", &knowledge);
 
     transaction.commit()?.await?;
 
@@ -297,17 +305,10 @@ pub async fn get_payees(database: &Database) -> Result<(Vec<Payee>, u64), Databa
 
     let kstore = transaction.object_store(KNOWLEDGE_STORE_NAME)?;
 
-    let knowledge = kstore
-        .get(JsValue::from_str(SERVER_KNOWLEDGE_KEY_PAYEES))?
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("no server knowledge found in indexdb"))?;
-
-    let knowledge = from_value::<u64>(knowledge).map_err(|e| {
-        anyhow::anyhow!(
-            "unable to deserialize server knowledge from indexdb: {:#?}",
-            e
-        )
-    })?;
+    let knowledge = match kstore.get(JsValue::from_str(SERVER_KNOWLEDGE_KEY_PAYEES))?.await? {
+        Some(k) => from_value::<u64>(k).unwrap_or(0),
+        None => 0,
+    };
 
     transaction.await?;
 

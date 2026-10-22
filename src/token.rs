@@ -3,7 +3,7 @@ use std::fmt::Display;
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct YnabToken {
     raw: String,
     expires_at: DateTime<Utc>,

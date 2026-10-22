@@ -1,6 +1,30 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct BudgetSummary {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub last_modified_on: Option<String>,
+    #[serde(default)]
+    pub first_month: Option<String>,
+    #[serde(default)]
+    pub last_month: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BudgetsResponse {
+    pub data: BudgetsResponseData,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BudgetsResponseData {
+    pub budgets: Vec<BudgetSummary>,
+    #[serde(default)]
+    pub default_budget: Option<BudgetSummary>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct YnabResponse {
     pub data: ResponseData,

@@ -5,14 +5,15 @@ use dioxus::prelude::*;
 use wasm_bindgen::JsValue;
 
 use ynab_payee_rs::{
-    api::{fetch_and_store_payees, fetch_and_store_transactions},
+    api::{fetch_and_store_payees, fetch_and_store_transactions, fetch_default_budget},
     database::{
-        create_database, get_payees, get_pending_actions, get_review_items, get_transactions,
-        nuke_database, search_transactions_paged, ProcessedTransaction, TransferPairRole,
+        create_database_for_budget, get_payees, get_pending_actions, get_review_items,
+        get_transactions, search_transactions_paged, store_ynab_token, ProcessedTransaction,
+        TransferPairRole,
     },
     models::{Payee, Transaction},
     views::{ActionQueue, Duplicates, ReviewQueue},
-    AuthActions, AuthActionStatus,
+    AuthActions, YnabToken,
 };
 
 #[derive(Debug, Clone, Routable, PartialEq)]
@@ -35,18 +36,62 @@ const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 
+const STORAGE_KEY_TOKEN: &str = "ynab_active_token";
+const STORAGE_KEY_BUDGET_ID: &str = "ynab_active_budget_id";
+const STORAGE_KEY_BUDGET_NAME: &str = "ynab_active_budget_name";
+
+fn get_local_storage(key: &str) -> Option<String> {
+    let window = web_sys::window()?;
+    let storage = window.local_storage().ok()??;
+    storage.get_item(key).ok()?
+}
+
+fn set_local_storage(key: &str, value: &str) {
+    if let Some(window) = web_sys::window() {
+        if let Ok(Some(storage)) = window.local_storage() {
+            let _ = storage.set_item(key, value);
+        }
+    }
+}
+
+fn remove_local_storage(key: &str) {
+    if let Some(window) = web_sys::window() {
+        if let Ok(Some(storage)) = window.local_storage() {
+            let _ = storage.remove_item(key);
+        }
+    }
+}
+
+fn do_login() {
+    let auth_url = "https://app.ynab.com/oauth/authorize?client_id=Dszs-ubBjiUIP9pEHY7znF9LI_GrFdWSErx8zj84JWA&redirect_uri=http%3A%2F%2Flocalhost%3A8080&response_type=token&scope=";
+    if let Some(window) = web_sys::window() {
+        let _ = window.location().set_href(auth_url);
+    }
+}
+
 /// Local in-memory cache of payees pulled from the API; don't update this too often
 static PAYEES_CACHE: GlobalSignal<Vec<Payee>> = GlobalSignal::new(|| Vec::new());
 static PAYEES_KNOWLEDGE: GlobalSignal<u64> = GlobalSignal::new(|| 0);
 static TRANSACTIONS_CACHE: GlobalSignal<Vec<Transaction>> = GlobalSignal::new(|| Vec::new());
 static TRANSACTIONS_KNOWLEDGE: GlobalSignal<u64> = GlobalSignal::new(|| 0);
 /// The budget ID to use when talking to the API.
-/// "default" routes to the budget selected by the user on the YNAB OAuth authorization page.
-static BUDGET: GlobalSignal<&str> = GlobalSignal::new(|| "default");
+static BUDGET: GlobalSignal<String> = GlobalSignal::new(|| "default".to_string());
+static BUDGET_NAME: GlobalSignal<String> = GlobalSignal::new(|| String::new());
 static REVIEW_QUEUE_COUNT: GlobalSignal<usize> = GlobalSignal::new(|| 0);
 static ACTION_QUEUE_COUNT: GlobalSignal<usize> = GlobalSignal::new(|| 0);
 static IS_SYNCING: GlobalSignal<bool> = GlobalSignal::new(|| false);
 static SYNC_ERROR: GlobalSignal<Option<String>> = GlobalSignal::new(|| None);
+
+#[derive(Clone, PartialEq)]
+enum AppState {
+    NeedsLogin,
+    Ready {
+        db: DbHandle,
+        token: YnabToken,
+        is_fresh_login: bool,
+    },
+    Error(String),
+}
 
 fn main() {
     dioxus::launch(App);
@@ -61,29 +106,148 @@ fn App() -> Element {
 
     let callback_access_token = use_hook(get_token_from_hash);
 
-    let db_resource = use_resource(move || async move {
-        let db = create_database().await.expect("unable to open database");
-        Arc::new(db)
+    let init_resource = use_resource(move || {
+        let cb_token = callback_access_token.clone();
+        async move {
+            if let Some(raw_token) = cb_token {
+                let token = YnabToken::new(raw_token.clone());
+                match fetch_default_budget(&raw_token).await {
+                    Ok(budget) => {
+                        *BUDGET.write() = budget.id.clone();
+                        *BUDGET_NAME.write() = budget.name.clone();
+
+                        if let Ok(token_json) = serde_json::to_string(&token) {
+                            set_local_storage(STORAGE_KEY_TOKEN, &token_json);
+                        }
+                        set_local_storage(STORAGE_KEY_BUDGET_ID, &budget.id);
+                        set_local_storage(STORAGE_KEY_BUDGET_NAME, &budget.name);
+
+                        match create_database_for_budget(&budget.id).await {
+                            Ok(db) => {
+                                let _ = store_ynab_token(&db, token.clone()).await;
+                                AppState::Ready {
+                                    db: DbHandle(Arc::new(db)),
+                                    token,
+                                    is_fresh_login: true,
+                                }
+                            }
+                            Err(e) => AppState::Error(format!(
+                                "Failed to open database for budget {}: {:?}",
+                                budget.name, e
+                            )),
+                        }
+                    }
+                    Err(e) => AppState::Error(format!(
+                        "Failed to get budget information from YNAB: {}",
+                        e
+                    )),
+                }
+            } else {
+                let stored_token = get_local_storage(STORAGE_KEY_TOKEN)
+                    .and_then(|json| serde_json::from_str::<YnabToken>(&json).ok());
+                let stored_budget_id = get_local_storage(STORAGE_KEY_BUDGET_ID);
+                let stored_budget_name = get_local_storage(STORAGE_KEY_BUDGET_NAME);
+
+                match (stored_token, stored_budget_id) {
+                    (Some(token), Some(budget_id)) if token.is_valid() => {
+                        *BUDGET.write() = budget_id.clone();
+                        if let Some(name) = stored_budget_name {
+                            *BUDGET_NAME.write() = name;
+                        }
+                        match create_database_for_budget(&budget_id).await {
+                            Ok(db) => AppState::Ready {
+                                db: DbHandle(Arc::new(db)),
+                                token,
+                                is_fresh_login: false,
+                            },
+                            Err(e) => AppState::Error(format!(
+                                "Failed to open database for budget: {:?}",
+                                e
+                            )),
+                        }
+                    }
+                    (Some(token), None) if token.is_valid() => {
+                        match fetch_default_budget(&token.to_string()).await {
+                            Ok(budget) => {
+                                *BUDGET.write() = budget.id.clone();
+                                *BUDGET_NAME.write() = budget.name.clone();
+                                set_local_storage(STORAGE_KEY_BUDGET_ID, &budget.id);
+                                set_local_storage(STORAGE_KEY_BUDGET_NAME, &budget.name);
+                                match create_database_for_budget(&budget.id).await {
+                                    Ok(db) => {
+                                        let _ = store_ynab_token(&db, token.clone()).await;
+                                        AppState::Ready {
+                                            db: DbHandle(Arc::new(db)),
+                                            token,
+                                            is_fresh_login: false,
+                                        }
+                                    }
+                                    Err(e) => AppState::Error(format!(
+                                        "Failed to open database for budget: {:?}",
+                                        e
+                                    )),
+                                }
+                            }
+                            Err(e) => AppState::Error(format!("Failed to fetch budget: {}", e)),
+                        }
+                    }
+                    _ => {
+                        remove_local_storage(STORAGE_KEY_TOKEN);
+                        remove_local_storage(STORAGE_KEY_BUDGET_ID);
+                        remove_local_storage(STORAGE_KEY_BUDGET_NAME);
+                        AppState::NeedsLogin
+                    }
+                }
+            }
+        }
     });
 
-    let db_handle = db_resource.read().as_ref().cloned();
+    let current_state = init_resource.read().as_ref().cloned();
 
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: TAILWIND_CSS }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
 
-        match db_handle {
-            Some(db) => rsx! {
+        match current_state {
+            Some(AppState::Ready { db, token, is_fresh_login }) => rsx! {
                 AuthenticatedApp {
-                    db: DbHandle(db),
-                    callback_access_token: callback_access_token.clone(),
+                    db,
+                    initial_token: token,
+                    is_fresh_login,
+                }
+            },
+            Some(AppState::NeedsLogin) => rsx! {
+                div {
+                    class: "login-container",
+                    h2 { "YNAB Payee Manager" }
+                    p { "Please authenticate with YNAB to manage payees in your selected budget." }
+                    button {
+                        id: "login",
+                        onclick: move |_| do_login(),
+                        "Login with YNAB"
+                    }
+                }
+            },
+            Some(AppState::Error(err)) => rsx! {
+                div {
+                    class: "login-container",
+                    h2 { "Connection Error" }
+                    p {
+                        style: "color: #f85149; margin-bottom: 16px;",
+                        "{err}"
+                    }
+                    button {
+                        id: "login",
+                        onclick: move |_| do_login(),
+                        "Re-authenticate with YNAB"
+                    }
                 }
             },
             None => rsx! {
                 div {
                     class: "login-container",
-                    p { "Initializing database..." }
+                    p { "Connecting to budget..." }
                 }
             },
         }
@@ -99,42 +263,91 @@ impl PartialEq for DbHandle {
     }
 }
 
+async fn perform_sync(
+    db: &Arc<idb::Database>,
+    token_str: &str,
+    budget: &str,
+) {
+    if *IS_SYNCING.peek() {
+        debug!("Sync already in progress, waiting for previous sync to complete");
+        return;
+    }
+
+    *IS_SYNCING.write() = true;
+    *SYNC_ERROR.write() = None;
+
+    match fetch_and_store_payees(db, token_str, budget).await {
+        Ok((payees, pk)) => {
+            *PAYEES_CACHE.write() = payees;
+            *PAYEES_KNOWLEDGE.write() = pk;
+        }
+        Err(e) => {
+            *SYNC_ERROR.write() = Some(format!("Payee sync failed: {}", e));
+        }
+    }
+
+    match fetch_and_store_transactions(db, token_str, budget).await {
+        Ok((txs, tk, _)) => {
+            *TRANSACTIONS_CACHE.write() = txs;
+            *TRANSACTIONS_KNOWLEDGE.write() = tk;
+        }
+        Err(e) => {
+            *SYNC_ERROR.write() = Some(format!("Transaction sync failed: {}", e));
+        }
+    }
+
+    if let Ok(items) = get_review_items(db).await {
+        *REVIEW_QUEUE_COUNT.write() = items.len();
+    }
+    if let Ok(pending) = get_pending_actions(db).await {
+        *ACTION_QUEUE_COUNT.write() = pending.len();
+    }
+
+    *IS_SYNCING.write() = false;
+}
+
 #[component]
-fn AuthenticatedApp(db: DbHandle, callback_access_token: Option<String>) -> Element {
+fn AuthenticatedApp(db: DbHandle, initial_token: YnabToken, is_fresh_login: bool) -> Element {
     let db = db.0;
     use_context_provider(|| db.clone());
     debug!("added database handle to context");
 
-    let initial_token = callback_access_token.clone().map(Into::into);
+    let tok = initial_token.clone();
     let db_for_auth = db.clone();
     let auth_actions = use_hook(move || {
-        let aa = AuthActions::new(db_for_auth.clone(), initial_token);
-        aa
+        AuthActions::new(db_for_auth.clone(), Some(tok))
     });
     use_context_provider(|| auth_actions.clone());
     debug!("added auth_actions handle to context");
 
-    let db_for_counts = db.clone();
-    use_effect(move || {
-        let db = db_for_counts.clone();
+    let db_for_sync = db.clone();
+    let token_for_sync = initial_token.clone();
+    use_hook(move || {
+        let db = db_for_sync.clone();
+        let token = token_for_sync.clone();
         spawn(async move {
+            // First load cached data from IndexedDB immediately so UI renders without delay
+            if let Ok((payees, knowledge)) = get_payees(&db).await {
+                *PAYEES_CACHE.write() = payees;
+                *PAYEES_KNOWLEDGE.write() = knowledge;
+            }
+            if let Ok((txs, knowledge)) = get_transactions(&db).await {
+                *TRANSACTIONS_CACHE.write() = txs;
+                *TRANSACTIONS_KNOWLEDGE.write() = knowledge;
+            }
             if let Ok(items) = get_review_items(&db).await {
                 *REVIEW_QUEUE_COUNT.write() = items.len();
             }
             if let Ok(pending) = get_pending_actions(&db).await {
                 *ACTION_QUEUE_COUNT.write() = pending.len();
             }
+
+            if token.is_valid() {
+                let budget = BUDGET.peek().clone();
+                perform_sync(&db, &token.to_string(), &budget).await;
+            }
         });
     });
-
-    let do_login = move |_| {
-        let auth_url = "https://app.ynab.com/oauth/authorize?client_id=Dszs-ubBjiUIP9pEHY7znF9LI_GrFdWSErx8zj84JWA&redirect_uri=http%3A%2F%2Flocalhost%3A8080&response_type=token&scope=";
-
-        // Send user to ynab login page
-        if let Some(window) = web_sys::window() {
-            let _ = window.location().set_href(auth_url);
-        }
-    };
 
     let token = (auth_actions.token)();
     debug!("token in main: {:#?}", &token);
@@ -145,25 +358,17 @@ fn AuthenticatedApp(db: DbHandle, callback_access_token: Option<String>) -> Elem
             }
         }
         _ => {
-            match &*auth_actions.status.read() {
-                AuthActionStatus::Loading => rsx! {
-                    div {
-                        class: "login-container",
-                        p { "Loading authentication..." }
+            rsx! {
+                div {
+                    class: "login-container",
+                    h2 { "YNAB Payee Manager" }
+                    p { "Your session has expired. Please authenticate with YNAB again." }
+                    button {
+                        id: "login",
+                        onclick: move |_| do_login(),
+                        "Login with YNAB"
                     }
-                },
-                _ => rsx! {
-                    div {
-                        class: "login-container",
-                        h2 { "YNAB Payee Manager" }
-                        p { "Please authenticate with YNAB to manage payees in your selected budget." }
-                        button {
-                            id: "login",
-                            onclick: do_login,
-                            "Login with YNAB"
-                        }
-                    }
-                },
+                }
             }
         }
     }
@@ -172,60 +377,8 @@ fn AuthenticatedApp(db: DbHandle, callback_access_token: Option<String>) -> Elem
 /// Payees Page
 #[component]
 fn Payees() -> Element {
-    let db = use_context::<Arc<idb::Database>>();
-    let auth = use_context::<AuthActions>();
-    let token = (auth.token)();
-
-    let mut is_loading = use_signal(|| false);
-    let mut error_msg = use_signal(|| Option::<String>::None);
     let mut show_zero_only = use_signal(|| false);
     let mut struck_payees = use_signal(|| HashSet::<String>::new());
-
-    let db_for_load = db.clone();
-    let token_for_load = token.clone();
-
-    // Load initial data: load cached from IndexedDB, and if cache is empty, fetch from API
-    use_resource(move || {
-        let db = db_for_load.clone();
-        let token = token_for_load.clone();
-        async move {
-            // First load payees from IndexedDB
-            if let Ok((payees, knowledge)) = get_payees(&db).await {
-                if !payees.is_empty() {
-                    *PAYEES_CACHE.write() = payees;
-                    *PAYEES_KNOWLEDGE.write() = knowledge;
-                    debug!("Loaded payees from IndexedDB");
-                }
-            }
-            // Also load transactions from IndexedDB
-            if let Ok((txs, knowledge)) = get_transactions(&db).await {
-                if !txs.is_empty() {
-                    *TRANSACTIONS_CACHE.write() = txs;
-                    *TRANSACTIONS_KNOWLEDGE.write() = knowledge;
-                    debug!("Loaded transactions from IndexedDB");
-                }
-            }
-
-            // If caches are empty and we have a valid token, fetch automatically
-            if let Some(ref t) = token {
-                if t.is_valid() {
-                    let budget = *BUDGET.read();
-                    if PAYEES_CACHE.read().is_empty() {
-                        is_loading.set(true);
-                        error_msg.set(None);
-                        if let Ok((payees, k)) = fetch_and_store_payees(&db, &t.to_string(), budget).await {
-                            *PAYEES_CACHE.write() = payees;
-                            *PAYEES_KNOWLEDGE.write() = k;
-                        }
-                        is_loading.set(false);
-                    }
-                    if TRANSACTIONS_CACHE.read().is_empty() {
-                        let _ = fetch_and_store_transactions(&db, &t.to_string(), budget).await;
-                    }
-                }
-            }
-        }
-    });
 
     let tx_cache = TRANSACTIONS_CACHE.read();
     let mut tx_counts: HashMap<&str, usize> = HashMap::new();
@@ -273,13 +426,6 @@ fn Payees() -> Element {
     }
 
     rsx! {
-        if let Some(err) = error_msg.read().as_ref() {
-            div {
-                class: "error-banner",
-                style: "margin-bottom: 14px;",
-                "Error: {err}"
-            }
-        }
         div {
             class: "stats-bar",
             span { "Total Payees: " strong { "{total_payees}" } }
@@ -309,8 +455,8 @@ fn Payees() -> Element {
             }
         }
 
-        if *is_loading.read() && PAYEES_CACHE.read().is_empty() {
-            p { "Loading payees from YNAB..." }
+        if *IS_SYNCING.read() && PAYEES_CACHE.read().is_empty() {
+            p { "Loading payees and transactions from YNAB..." }
         } else if display_payees.is_empty() {
             div {
                 class: "empty-state-card",
@@ -433,7 +579,7 @@ fn ReviewPage() -> Element {
 fn ActionsPage() -> Element {
     rsx! {
         ActionQueue {
-            budget_id: (*BUDGET.read()).to_string(),
+            budget_id: BUDGET.read().clone(),
             action_count: ACTION_QUEUE_COUNT.signal(),
             payees_cache: PAYEES_CACHE.signal(),
         }
@@ -831,30 +977,11 @@ fn Navbar() -> Element {
             spawn(async move {
                 if let Some(ref t) = token {
                     if t.is_valid() {
-                        *IS_SYNCING.write() = true;
-                        *SYNC_ERROR.write() = None;
-                        let budget = *BUDGET.read();
-                        let token_str = t.to_string();
-
-                        let payee_res = fetch_and_store_payees(&db, &token_str, budget).await;
-                        let tx_res = fetch_and_store_transactions(&db, &token_str, budget).await;
-
-                        match (payee_res, tx_res) {
-                            (Ok((payees, pk)), Ok((txs, tk, _))) => {
-                                *PAYEES_CACHE.write() = payees;
-                                *PAYEES_KNOWLEDGE.write() = pk;
-                                *TRANSACTIONS_CACHE.write() = txs;
-                                *TRANSACTIONS_KNOWLEDGE.write() = tk;
-                            }
-                            (Err(e), _) => {
-                                *SYNC_ERROR.write() = Some(format!("Payee sync failed: {}", e));
-                            }
-                            (_, Err(e)) => {
-                                *SYNC_ERROR.write() = Some(format!("Transaction sync failed: {}", e));
-                            }
+                        if *IS_SYNCING.peek() {
+                            return;
                         }
-
-                        *IS_SYNCING.write() = false;
+                        let budget = BUDGET.peek().clone();
+                        perform_sync(&db, &t.to_string(), &budget).await;
                     }
                 }
             });
@@ -866,6 +993,9 @@ fn Navbar() -> Element {
         move |_| {
             let db = db.clone();
             spawn(async move {
+                // Close database handle without nuking it
+                db.close();
+
                 // Clear in-memory token and caches
                 auth.token.set(None);
                 *PAYEES_CACHE.write() = Vec::new();
@@ -874,9 +1004,13 @@ fn Navbar() -> Element {
                 *TRANSACTIONS_KNOWLEDGE.write() = 0;
                 *REVIEW_QUEUE_COUNT.write() = 0;
                 *ACTION_QUEUE_COUNT.write() = 0;
+                *BUDGET.write() = "default".to_string();
+                *BUDGET_NAME.write() = String::new();
 
-                // Nuke database in IndexedDB
-                let _ = nuke_database(&db).await;
+                // Remove active session from localStorage
+                remove_local_storage(STORAGE_KEY_TOKEN);
+                remove_local_storage(STORAGE_KEY_BUDGET_ID);
+                remove_local_storage(STORAGE_KEY_BUDGET_NAME);
 
                 // Force a complete browser refresh at root
                 if let Some(window) = web_sys::window() {
@@ -893,6 +1027,13 @@ fn Navbar() -> Element {
             div {
                 class: "header-brand",
                 h1 { "YNAB Payee Manager" }
+                if !BUDGET_NAME.read().is_empty() {
+                    span {
+                        class: "header-budget-badge",
+                        style: "margin-left: 12px; font-size: 13px; color: #58a6ff; font-weight: 500; background: rgba(56, 139, 253, 0.15); padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(56, 139, 253, 0.3);",
+                        "{BUDGET_NAME.read()}"
+                    }
+                }
             }
             nav {
                 id: "navbar",
@@ -936,7 +1077,7 @@ fn Navbar() -> Element {
                 }
                 button {
                     class: "btn-signout btn-outline-danger",
-                    title: "Nuke database and sign out",
+                    title: "Close database and sign out",
                     onclick: sign_out,
                     "Sign Out"
                 }
