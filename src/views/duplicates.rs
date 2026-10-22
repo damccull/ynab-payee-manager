@@ -5,7 +5,7 @@ use chrono::Utc;
 use dioxus::prelude::*;
 
 use crate::{
-    database::{get_all_actions, get_review_items, save_review_item},
+    database::{get_active_payee_ids, get_all_actions, get_review_items, save_review_item},
     fuzzy::find_duplicate_groups,
     models::{ActionStatus, DuplicateGroup, PayeeActionKind, PayeeReviewItem},
 };
@@ -52,10 +52,21 @@ async fn run_scan(
         }
     }
 
+    let active_ids = get_active_payee_ids(&db).await.unwrap_or_default();
+    let filter_zero_tx = !active_ids.is_empty();
+
     let cache = payees_cache.read();
     let unqueued_payees: Vec<crate::models::Payee> = cache
         .iter()
-        .filter(|p| !queued_ids.contains(&p.id))
+        .filter(|p| {
+            if queued_ids.contains(&p.id) {
+                return false;
+            }
+            if filter_zero_tx && !active_ids.contains(&p.id) {
+                return false;
+            }
+            true
+        })
         .cloned()
         .collect();
 

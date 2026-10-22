@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use dioxus::prelude::*;
-use reqwest::header::HeaderMap;
 use wasm_bindgen::JsValue;
 
 use ynab_payee_rs::{
-    database::{create_database, get_payees, get_pending_actions, get_review_items, replace_payees},
-    models::{Payee, YnabResponse},
+    api::{fetch_and_store_payees, fetch_and_store_transactions},
+    database::{create_database, get_payees, get_pending_actions, get_review_items, get_transactions},
+    models::{Payee, Transaction},
     views::{ActionQueue, Duplicates, ReviewQueue},
     AuthActions, AuthActionStatus,
 };
@@ -34,6 +34,8 @@ const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 /// Local in-memory cache of payees pulled from the API; don't update this too often
 static PAYEES_CACHE: GlobalSignal<Vec<Payee>> = GlobalSignal::new(|| Vec::new());
 static PAYEES_KNOWLEDGE: GlobalSignal<u64> = GlobalSignal::new(|| 0);
+static TRANSACTIONS_CACHE: GlobalSignal<Vec<Transaction>> = GlobalSignal::new(|| Vec::new());
+static TRANSACTIONS_KNOWLEDGE: GlobalSignal<u64> = GlobalSignal::new(|| 0);
 /// The budget ID to use when talking to the API.
 /// "default" routes to the budget selected by the user on the YNAB OAuth authorization page.
 static BUDGET: GlobalSignal<&str> = GlobalSignal::new(|| "default");
@@ -161,43 +163,6 @@ fn AuthenticatedApp(db: DbHandle, callback_access_token: Option<String>) -> Elem
     }
 }
 
-async fn fetch_and_store_payees(db: &idb::Database, token_str: &str) -> Result<(), String> {
-    let httpclient = reqwest::Client::new();
-    let mut headers = HeaderMap::new();
-    let auth_header = format!("Bearer {}", token_str)
-        .parse()
-        .map_err(|e| format!("Invalid auth header: {}", e))?;
-    headers.insert("Authorization", auth_header);
-
-    let budget = BUDGET.read();
-    let url = format!("https://api.ynab.com/v1/budgets/{}/payees", *budget);
-    let response = httpclient
-        .get(&url)
-        .headers(headers)
-        .send()
-        .await
-        .map_err(|e| format!("Network request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("YNAB API error {}: {}", status, body));
-    }
-
-    let ynabresponse: YnabResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-    let _ = replace_payees(db, &ynabresponse.data)
-        .await
-        .map_err(|e| format!("Failed to store payees in IndexedDB: {:?}", e))?;
-
-    *PAYEES_CACHE.write() = ynabresponse.data.payees;
-    *PAYEES_KNOWLEDGE.write() = ynabresponse.data.server_knowledge;
-    Ok(())
-}
-
 /// Payees Page
 #[component]
 fn Payees() -> Element {
@@ -216,7 +181,7 @@ fn Payees() -> Element {
         let db = db_for_load.clone();
         let token = token_for_load.clone();
         async move {
-            // First load from IndexedDB
+            // First load payees from IndexedDB
             if let Ok((payees, knowledge)) = get_payees(&db).await {
                 if !payees.is_empty() {
                     *PAYEES_CACHE.write() = payees;
@@ -224,17 +189,30 @@ fn Payees() -> Element {
                     debug!("Loaded payees from IndexedDB");
                 }
             }
+            // Also load transactions from IndexedDB
+            if let Ok((txs, knowledge)) = get_transactions(&db).await {
+                if !txs.is_empty() {
+                    *TRANSACTIONS_CACHE.write() = txs;
+                    *TRANSACTIONS_KNOWLEDGE.write() = knowledge;
+                    debug!("Loaded transactions from IndexedDB");
+                }
+            }
 
-            // If PAYEES_CACHE is still empty and we have a valid token, fetch automatically
-            if PAYEES_CACHE.read().is_empty() {
-                if let Some(ref t) = token {
-                    if t.is_valid() {
+            // If caches are empty and we have a valid token, fetch automatically
+            if let Some(ref t) = token {
+                if t.is_valid() {
+                    let budget = *BUDGET.read();
+                    if PAYEES_CACHE.read().is_empty() {
                         is_loading.set(true);
                         error_msg.set(None);
-                        if let Err(e) = fetch_and_store_payees(&db, &t.to_string()).await {
-                            error_msg.set(Some(e));
+                        if let Ok((payees, k)) = fetch_and_store_payees(&db, &t.to_string(), budget, 0, false).await {
+                            *PAYEES_CACHE.write() = payees;
+                            *PAYEES_KNOWLEDGE.write() = k;
                         }
                         is_loading.set(false);
+                    }
+                    if TRANSACTIONS_CACHE.read().is_empty() {
+                        let _ = fetch_and_store_transactions(&db, &t.to_string(), budget, 0, false).await;
                     }
                 }
             }
@@ -251,9 +229,23 @@ fn Payees() -> Element {
                 if t.is_valid() {
                     is_loading.set(true);
                     error_msg.set(None);
-                    if let Err(e) = fetch_and_store_payees(&db, &t.to_string()).await {
-                        error_msg.set(Some(e));
+                    let budget = *BUDGET.read();
+                    let payee_k = *PAYEES_KNOWLEDGE.read();
+                    let tx_k = *TRANSACTIONS_KNOWLEDGE.read();
+
+                    match fetch_and_store_payees(&db, &t.to_string(), budget, payee_k, true).await {
+                        Ok((payees, k)) => {
+                            *PAYEES_CACHE.write() = payees;
+                            *PAYEES_KNOWLEDGE.write() = k;
+                        }
+                        Err(e) => error_msg.set(Some(e)),
                     }
+
+                    if let Ok((txs, k, _)) = fetch_and_store_transactions(&db, &t.to_string(), budget, tx_k, true).await {
+                        *TRANSACTIONS_CACHE.write() = txs;
+                        *TRANSACTIONS_KNOWLEDGE.write() = k;
+                    }
+
                     is_loading.set(false);
                 }
             }
@@ -305,7 +297,9 @@ fn Payees() -> Element {
                 span { class: "stats-hidden-badge", "{hidden_note}" }
             }
             span { class: "stats-divider", "|" }
-            span { "Server Knowledge: " code { "{PAYEES_KNOWLEDGE.read()}" } }
+            span { "Payee Knowledge: " code { "{PAYEES_KNOWLEDGE.read()}" } }
+            span { class: "stats-divider", "|" }
+            span { "Transactions Cached: " strong { "{TRANSACTIONS_CACHE.read().len()}" } }
         }
 
         if *is_loading.read() && PAYEES_CACHE.read().is_empty() {
@@ -396,49 +390,113 @@ fn ActionsPage() -> Element {
 /// Transaction Page
 #[component]
 fn Transactions() -> Element {
-    rsx! {
-        TransactionList {}
-    }
-}
+    let db = use_context::<Arc<idb::Database>>();
+    let auth = use_context::<AuthActions>();
+    let token = (auth.token)();
 
-/// Transaction List
-#[component]
-fn TransactionList() -> Element {
-    rsx! {
-        div {
-            class: "table-container",
-            table {
-                thead {
-                    tr {
-                        th { "Date" }
-                        th { "Amount" }
-                        th { "Memo" }
-                        th { "Cleared" }
-                        th { "Approved" }
-                        th { "Payee Name" }
-                        th { "Category" }
+    let mut is_syncing = use_signal(|| false);
+    let mut error_msg = use_signal(|| Option::<String>::None);
+
+    let db_for_sync = db.clone();
+    let token_for_sync = token.clone();
+    let sync_transactions = move |_| {
+        let db = db_for_sync.clone();
+        let token = token_for_sync.clone();
+        spawn(async move {
+            if let Some(ref t) = token {
+                if t.is_valid() {
+                    is_syncing.set(true);
+                    error_msg.set(None);
+                    let budget = *BUDGET.read();
+                    let tx_k = *TRANSACTIONS_KNOWLEDGE.read();
+                    match fetch_and_store_transactions(&db, &t.to_string(), budget, tx_k, true).await {
+                        Ok((txs, k, _)) => {
+                            *TRANSACTIONS_CACHE.write() = txs;
+                            *TRANSACTIONS_KNOWLEDGE.write() = k;
+                        }
+                        Err(e) => error_msg.set(Some(e)),
                     }
-                }
-                tbody {
-                    Transaction {}
+                    is_syncing.set(false);
                 }
             }
-        }
-    }
-}
+        });
+    };
 
-/// Transaction
-#[component]
-fn Transaction() -> Element {
+    let txs = TRANSACTIONS_CACHE.read();
+
     rsx! {
-        tr {
-            td {"data-fieldname": "date", "2026-01-01"},
-            td {"data-fieldname": "amount", "-100.00"},
-            td {"data-fieldname": "memo", "A test transaction"},
-            td {"data-fieldname": "cleared", "reconciled"},
-            td {"data-fieldname": "approved", "true"},
-            td {"data-fieldname": "payee_name", "ACME"},
-            td {"data-fieldname": "category_name", "Monthly"}
+        div {
+            class: "payees-header",
+            button {
+                class: "btn btn-primary",
+                onclick: sync_transactions,
+                disabled: *is_syncing.read(),
+                if *is_syncing.read() { "Syncing Transactions..." } else { "Sync Transactions" }
+            }
+            if let Some(err) = error_msg.read().as_ref() {
+                p { class: "error-banner", "Error: {err}" }
+            }
+        }
+        div {
+            class: "stats-bar",
+            span { "Total Transactions: " strong { "{txs.len()}" } }
+            span { class: "stats-divider", "|" }
+            span { "Transaction Knowledge: " code { "{TRANSACTIONS_KNOWLEDGE.read()}" } }
+        }
+
+        if txs.is_empty() {
+            div {
+                class: "empty-state-card",
+                p { class: "empty-title", "No Transactions Cached" }
+                p { class: "empty-description", "Transactions will load automatically from YNAB." }
+            }
+        } else {
+            div {
+                class: "table-container",
+                table {
+                    thead {
+                        tr {
+                            th { "Date" }
+                            th { "Amount" }
+                            th { "Payee Name" }
+                            th { "Category" }
+                            th { "Memo" }
+                            th { "Cleared" }
+                            th { "Approved" }
+                        }
+                    }
+                    tbody {
+                        for tx in txs.iter() {
+                            {
+                                let amount_dollars = (tx.amount as f64) / 1000.0;
+                                let amount_str = format!("${:.2}", amount_dollars);
+                                let payee_name = tx.payee_name.as_deref().unwrap_or("None");
+                                let category_name = tx.category_name.as_deref().unwrap_or("Uncategorized");
+                                let memo = tx.memo.as_deref().unwrap_or("");
+
+                                rsx! {
+                                    tr {
+                                        key: "{tx.id}",
+                                        td { "data-fieldname": "date", "{tx.date}" }
+                                        td { "data-fieldname": "amount", "{amount_str}" }
+                                        td { "data-fieldname": "payee_name", "{payee_name}" }
+                                        td { "data-fieldname": "category_name", "{category_name}" }
+                                        td { "data-fieldname": "memo", "{memo}" }
+                                        td { "data-fieldname": "cleared", "{tx.cleared}" }
+                                        td {
+                                            "data-fieldname": "approved",
+                                            span {
+                                                class: if tx.approved { "status-badge status-active" } else { "status-badge status-pending" },
+                                                if tx.approved { "Yes" } else { "No" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

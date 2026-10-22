@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use chrono::Utc;
 use dioxus::prelude::{debug, error, trace};
 use idb::{Database, DatabaseEvent, Factory, IndexParams, KeyPath, ObjectStoreParams};
@@ -6,11 +8,12 @@ use serde_wasm_bindgen::{from_value, Serializer};
 use wasm_bindgen::JsValue;
 
 use crate::{
-    models::{ActionStatus, Payee, PayeeAction, PayeeReviewItem, ResponseData},
+    models::{ActionStatus, Payee, PayeeAction, PayeeReviewItem, ResponseData, Transaction},
     settings::{
         ACTION_QUEUE_STORE_NAME, DATABASE_NAME, DATABASE_VERSION, KNOWLEDGE_STORE_NAME,
         PAYEES_STORE_NAME, PAYEE_REVIEW_QUEUE_STORE_NAME, SERVER_KNOWLEDGE_KEY_PAYEES,
-        SETTINGS_KEY_TOKEN, SETTINGS_STORE_NAME,
+        SERVER_KNOWLEDGE_KEY_TRANSACTIONS, SETTINGS_KEY_TOKEN, SETTINGS_STORE_NAME,
+        TRANSACTIONS_STORE_NAME,
     },
     YnabToken,
 };
@@ -122,6 +125,28 @@ pub async fn create_database() -> Result<Database, DatabaseError> {
                     Some(created_index),
                 )
                 .map_err(|e| error!("unable to create created_at index on action queue: {:#?}", e));
+        }
+
+        // Ensure 'transactions' object store exists
+        if !existing_stores.contains(&TRANSACTIONS_STORE_NAME.to_string()) {
+            let mut tx_params = ObjectStoreParams::new();
+            tx_params.auto_increment(false);
+            tx_params.key_path(Some(KeyPath::new_single("id")));
+
+            let tx_store = database
+                .create_object_store(TRANSACTIONS_STORE_NAME, tx_params)
+                .map_err(|e| error!("unable to create transactions store: {:#?}", e))
+                .expect("unable to create transactions store");
+
+            let mut payee_id_idx = IndexParams::new();
+            payee_id_idx.unique(false);
+            let _ = tx_store
+                .create_index(
+                    "payee_id",
+                    KeyPath::new_single("payee_id"),
+                    Some(payee_id_idx),
+                )
+                .map_err(|e| error!("unable to create payee_id index: {:#?}", e));
         }
     });
 
@@ -258,6 +283,148 @@ pub async fn get_payees(database: &Database) -> Result<(Vec<Payee>, u64), Databa
     transaction.await?;
 
     Ok((stored_payees, knowledge))
+}
+
+pub async fn upsert_payees(
+    database: &Database,
+    payees: &[Payee],
+    server_knowledge: u64,
+) -> Result<(), DatabaseError> {
+    let transaction = database.transaction(
+        &[PAYEES_STORE_NAME, KNOWLEDGE_STORE_NAME],
+        idb::TransactionMode::ReadWrite,
+    )?;
+
+    let store = transaction.object_store(PAYEES_STORE_NAME)?;
+    for payee in payees {
+        if payee.deleted {
+            let _ = store.delete(JsValue::from_str(&payee.id))?.await;
+        } else {
+            let val = payee
+                .serialize(&Serializer::json_compatible())
+                .map_err(|e| anyhow::anyhow!("unable to serialize payee: {:#?}", e))?;
+            store.put(&val, None)?.await?;
+        }
+    }
+
+    let kstore = transaction.object_store(KNOWLEDGE_STORE_NAME)?;
+    let val = server_knowledge
+        .serialize(&Serializer::json_compatible())
+        .map_err(|e| anyhow::anyhow!("unable to serialize server_knowledge: {:#?}", e))?;
+    kstore.put(&val, Some(&JsValue::from_str(SERVER_KNOWLEDGE_KEY_PAYEES)))?.await?;
+
+    transaction.commit()?.await?;
+    Ok(())
+}
+
+pub async fn replace_transactions(
+    database: &Database,
+    txs: &[Transaction],
+    server_knowledge: u64,
+) -> Result<(), DatabaseError> {
+    let transaction = database.transaction(
+        &[TRANSACTIONS_STORE_NAME, KNOWLEDGE_STORE_NAME],
+        idb::TransactionMode::ReadWrite,
+    )?;
+
+    let store = transaction.object_store(TRANSACTIONS_STORE_NAME)?;
+    store.clear()?.await?;
+
+    for tx in txs {
+        if !tx.deleted {
+            let val = tx
+                .serialize(&Serializer::json_compatible())
+                .map_err(|e| anyhow::anyhow!("unable to serialize transaction: {:#?}", e))?;
+            store.add(&val, None)?.await?;
+        }
+    }
+
+    let kstore = transaction.object_store(KNOWLEDGE_STORE_NAME)?;
+    let val = server_knowledge
+        .serialize(&Serializer::json_compatible())
+        .map_err(|e| anyhow::anyhow!("unable to serialize server_knowledge: {:#?}", e))?;
+    kstore.put(&val, Some(&JsValue::from_str(SERVER_KNOWLEDGE_KEY_TRANSACTIONS)))?.await?;
+
+    transaction.commit()?.await?;
+    Ok(())
+}
+
+pub async fn upsert_transactions(
+    database: &Database,
+    txs: &[Transaction],
+    server_knowledge: u64,
+) -> Result<(), DatabaseError> {
+    let transaction = database.transaction(
+        &[TRANSACTIONS_STORE_NAME, KNOWLEDGE_STORE_NAME],
+        idb::TransactionMode::ReadWrite,
+    )?;
+
+    let store = transaction.object_store(TRANSACTIONS_STORE_NAME)?;
+    for tx in txs {
+        if tx.deleted {
+            let _ = store.delete(JsValue::from_str(&tx.id))?.await;
+        } else {
+            let val = tx
+                .serialize(&Serializer::json_compatible())
+                .map_err(|e| anyhow::anyhow!("unable to serialize transaction: {:#?}", e))?;
+            store.put(&val, None)?.await?;
+        }
+    }
+
+    let kstore = transaction.object_store(KNOWLEDGE_STORE_NAME)?;
+    let val = server_knowledge
+        .serialize(&Serializer::json_compatible())
+        .map_err(|e| anyhow::anyhow!("unable to serialize server_knowledge: {:#?}", e))?;
+    kstore.put(&val, Some(&JsValue::from_str(SERVER_KNOWLEDGE_KEY_TRANSACTIONS)))?.await?;
+
+    transaction.commit()?.await?;
+    Ok(())
+}
+
+pub async fn get_transactions(
+    database: &Database,
+) -> Result<(Vec<Transaction>, u64), DatabaseError> {
+    let transaction = database.transaction(
+        &[TRANSACTIONS_STORE_NAME, KNOWLEDGE_STORE_NAME],
+        idb::TransactionMode::ReadOnly,
+    )?;
+
+    let store = transaction.object_store(TRANSACTIONS_STORE_NAME)?;
+    let stored = store.get_all(None, None)?.await?;
+
+    let txs = stored
+        .into_iter()
+        .map(|v| {
+            serde_wasm_bindgen::from_value(v)
+                .map_err(|e| anyhow::anyhow!("unable to map transaction: {:#?}", e))
+        })
+        .collect::<anyhow::Result<Vec<Transaction>>>()?;
+
+    let kstore = transaction.object_store(KNOWLEDGE_STORE_NAME)?;
+    let knowledge = match kstore.get(JsValue::from_str(SERVER_KNOWLEDGE_KEY_TRANSACTIONS))?.await? {
+        Some(k) => from_value::<u64>(k).unwrap_or(0),
+        None => 0,
+    };
+
+    transaction.await?;
+    Ok((txs, knowledge))
+}
+
+pub async fn get_active_payee_ids(
+    database: &Database,
+) -> Result<HashSet<String>, DatabaseError> {
+    let (txs, _) = get_transactions(database).await?;
+    let mut set = HashSet::new();
+    for tx in txs {
+        if !tx.deleted {
+            if let Some(pid) = tx.payee_id {
+                if !pid.trim().is_empty() {
+                    set.insert(pid);
+                }
+            }
+        }
+    }
+    Ok(set)
 }
 
 // ----------------------------------------------------------------------------

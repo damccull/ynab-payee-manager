@@ -1,3 +1,4 @@
+pub mod api;
 mod auth_actions;
 pub mod database;
 pub mod fuzzy;

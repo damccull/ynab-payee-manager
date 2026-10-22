@@ -178,7 +178,7 @@ pub fn ReviewQueue(
                                                     let Some(live_item) = cur_items.iter().find(|i| i.id == item_id).cloned() else {
                                                         return;
                                                     };
-                                                    let target_name = live_item.display_name().to_string();
+                                                    let target_name = live_item.display_name().trim().to_string();
                                                     let source_ids = live_item.source_payee_ids.clone();
                                                     let source_names = live_item.source_payee_names.clone();
 

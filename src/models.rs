@@ -12,6 +12,32 @@ pub struct ResponseData {
     pub server_knowledge: u64,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TransactionsResponse {
+    pub data: TransactionsResponseData,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TransactionsResponseData {
+    pub transactions: Vec<Transaction>,
+    pub server_knowledge: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct Transaction {
+    pub id: String,
+    pub date: String,
+    pub amount: i64,
+    pub memo: Option<String>,
+    pub cleared: String,
+    pub approved: bool,
+    pub payee_id: Option<String>,
+    pub payee_name: Option<String>,
+    pub category_id: Option<String>,
+    pub category_name: Option<String>,
+    pub deleted: bool,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct Payee {
     pub id: String,
@@ -33,8 +59,8 @@ pub struct PayeeReviewItem {
 impl PayeeReviewItem {
     pub fn display_name(&self) -> &str {
         if let Some(custom) = &self.custom_name {
-            if !custom.trim().is_empty() {
-                return custom.trim();
+            if !custom.is_empty() {
+                return custom;
             }
         }
         &self.suggested_name

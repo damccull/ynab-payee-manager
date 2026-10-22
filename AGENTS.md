@@ -17,14 +17,17 @@ Client-side Single Page Application (SPA) built with Rust and [Dioxus 0.7](https
   - Configured with `"default"` as the budget identifier (`BUDGET` global signal).
   - In YNAB OAuth apps with Default Budget Selection enabled, `/v1/budgets/default/...` routes to whichever budget the user selected during OAuth consent.
 - **Local Persistence (IndexedDB)**:
-  - Database name: `ynab-payee-manager` (Version `10`).
-  - Managed via the `idb` crate with three object stores:
+  - Database name: `ynab-payee-manager` (Version `13`).
+  - Managed via the `idb` crate with stores:
     - `settings`: Stores the serialized `YnabToken` under key `"ynab_user_token"`.
     - `payees`: Stores `Payee` records with inline key `id` and an index on `name`.
-    - `server_knowledge`: Stores the latest server knowledge integer (`u64`) for payees under key `"payees"`.
+    - `transactions`: Stores `Transaction` records with inline key `id` and index on `payee_id`.
+    - `server_knowledge`: Stores the latest server knowledge integer (`u64`) for payees and transactions.
+    - `payee_review_queue`: Stores pending `PayeeReviewItem` records awaiting user name confirmation.
+    - `action_queue`: Stores queued `PayeeAction` records waiting to be committed to YNAB.
 - **API Communication**:
-  - Uses `reqwest` with JSON and WASM support to query `https://api.ynab.com/v1/budgets/default/payees` with a Bearer token.
-  - Responses update both IndexedDB and in-memory global signals.
+  - Uses `reqwest` with JSON and WASM support to query `https://api.ynab.com/v1/budgets/default/payees` and `/transactions` with delta sync (`last_knowledge_of_server`).
+  - Responses update IndexedDB and in-memory global signals.
 
 ---
 
@@ -47,7 +50,15 @@ The application is structured into the following components and routes in `src/m
   - Includes a manual "Sync Payees" button to fetch current payee data from the YNAB API, persist it to IndexedDB via `replace_payees`, and update in-memory cache signals.
   - Renders a table displaying Payee ID, Name, Transfer Account ID, and Deleted status.
 - **`Transactions` (`/transactions`)**:
-  - Stub view rendering a placeholder transaction table (`TransactionList`, `Transaction`).
+  - Displays cached transactions stored in IndexedDB with date, payee, memo, amount, cleared, and approved status.
+  - Includes a manual "Sync Transactions" button with delta sync support.
+- **`Duplicates` (`/duplicates`)**:
+  - Scans cached payees (excluding payees with 0 transactions and those already queued) using fuzzy string similarity clustering.
+  - Allows selecting duplicate payees to combine and queuing them into the Payee Review Queue.
+- **`ReviewQueue` (`/review`)**:
+  - Displays combined payees where the user can confirm or edit the suggested target name before pushing to the Action Queue.
+- **`ActionQueue` (`/queue`)**:
+  - Displays queued transactions updates and renames, with committing, clearing, and automatic delta refresh upon completion.
 
 ---
 
