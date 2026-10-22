@@ -14,10 +14,9 @@ Client-side Single Page Application (SPA) built with Rust and [Dioxus 0.7](https
   - On application mount, `get_token_from_hash()` parses the token, immediately strips the fragment from browser history via `window.history().replace_state_with_url`, and provides it for persistence.
   - Token validity is tracked with `YnabToken`, currently defaulting to a 2-hour lifespan from time of creation.
 - **Budget Selection**:
-  - Configured with `"default"` as the budget identifier (`BUDGET` global signal).
-  - In YNAB OAuth apps with Default Budget Selection enabled, `/v1/budgets/default/...` routes to whichever budget the user selected during OAuth consent.
+  - Dynamically discovered on sign-in via YNAB API `GET /v1/budgets` to obtain the budget ID and name (`BUDGET` and `BUDGET_NAME` global signals).
 - **Local Persistence (IndexedDB)**:
-  - Database name: `ynab-payee-manager` (Version `13`).
+  - Per-budget databases named `ynab-budget-{budget_id}` (Version `14`).
   - Managed via the `idb` crate with stores:
     - `settings`: Stores the serialized `YnabToken` under key `"ynab_user_token"`.
     - `payees`: Stores `Payee` records with inline key `id` and an index on `name`.
@@ -25,8 +24,9 @@ Client-side Single Page Application (SPA) built with Rust and [Dioxus 0.7](https
     - `server_knowledge`: Stores the latest server knowledge integer (`u64`) for payees and transactions.
     - `payee_review_queue`: Stores pending `PayeeReviewItem` records awaiting user name confirmation.
     - `action_queue`: Stores queued `PayeeAction` records waiting to be committed to YNAB.
+    - `ignored_pairs`: Stores user-ignored duplicate payee pairs.
 - **API Communication**:
-  - Uses `reqwest` with JSON and WASM support to query `https://api.ynab.com/v1/budgets/default/payees` and `/transactions`.
+  - Uses `reqwest` with JSON and WASM support to query `https://api.ynab.com/v1/budgets/{budget_id}/payees`, `/transactions`, and `/budgets`.
   - Full refreshes replace local records in IndexedDB and in-memory global signals.
 
 ---
@@ -40,10 +40,11 @@ The application is structured into the following components and routes in `src/m
   - Provides the database handle (`Arc<idb::Database>`) and `AuthActions` instance into Dioxus context.
   - If no valid token is found, displays the login view with a "Login with YNAB" button.
   - When authenticated with a valid token, renders `Router::<Route>`.
+  - On mount, immediately hydrates state from IndexedDB. If starting with an existing session token, checks if it has been longer than an hour since the last sync (or never synced); if so, triggers an auto-sync (payees first, and transactions if missing or older knowledge).
 - **`Navbar`**: Layout component wrapping child routes.
   - Provides navigation links between Payees (`/`), Duplicates (`/duplicates`), Review (`/review`), Action Queue (`/queue`), and Transactions (`/transactions`).
-  - Includes a unified "Sync" button at the top of the page that refreshes both payees and transactions from YNAB.
-  - Includes a "Sign Out" button that nukes the token and database and triggers a clean re-authentication.
+  - Includes a unified "Sync" button at the top of the page that forces a fresh sync of both payees and transactions from YNAB regardless of knowledge.
+  - Includes a "Sign Out" button that closes the active database without deleting it, clears the session and in-memory caches, and redirects to the login screen.
   - Displays a warning banner advising users to make a budget backup.
   - Mounts child pages via `Outlet::<Route>`.
 - **`Payees` (`/`)**:
