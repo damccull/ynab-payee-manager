@@ -349,7 +349,6 @@ pub async fn get_transactions(
         None => 0,
     };
 
-    transaction.await?;
     Ok((txs, knowledge))
 }
 
@@ -369,7 +368,6 @@ pub async fn get_transactions_count(database: &Database) -> Result<usize, Databa
     )?;
     let store = transaction.object_store(TRANSACTIONS_STORE_NAME)?;
     let count = store.count(None)?.await?;
-    transaction.await?;
     Ok(count as usize)
 }
 
@@ -447,8 +445,6 @@ pub async fn search_transactions_paged(
         .filter_map(|v| serde_wasm_bindgen::from_value::<Transaction>(v).ok());
 
     let paged = filter_and_page_transactions(txs, query, page, page_size);
-
-    transaction.await?;
 
     Ok(paged)
 }

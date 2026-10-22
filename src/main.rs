@@ -434,8 +434,8 @@ fn Transactions() -> Element {
         let load_page = load_page.clone();
         move || {
             let _ = *TRANSACTIONS_KNOWLEDGE.read();
-            let q = search_query.read().clone();
-            let p = *current_page.read();
+            let q = search_query.peek().clone();
+            let p = *current_page.peek();
             load_page(p, q);
         }
     });
