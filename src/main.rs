@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use dioxus::prelude::*;
@@ -177,6 +178,8 @@ fn Payees() -> Element {
 
     let mut is_loading = use_signal(|| false);
     let mut error_msg = use_signal(|| Option::<String>::None);
+    let mut show_zero_only = use_signal(|| false);
+    let mut struck_payees = use_signal(|| HashSet::<String>::new());
 
     let db_for_load = db.clone();
     let token_for_load = token.clone();
@@ -224,6 +227,16 @@ fn Payees() -> Element {
         }
     });
 
+    let tx_cache = TRANSACTIONS_CACHE.read();
+    let mut tx_counts: HashMap<&str, usize> = HashMap::new();
+    for tx in tx_cache.iter() {
+        if !tx.deleted {
+            if let Some(ref pid) = tx.payee_id {
+                *tx_counts.entry(pid.as_str()).or_insert(0) += 1;
+            }
+        }
+    }
+
     let payees_cache = PAYEES_CACHE.read();
     let mut display_payees: Vec<_> = payees_cache
         .iter()
@@ -248,6 +261,17 @@ fn Payees() -> Element {
         n => format!(" ({n} transfer account payees hidden)"),
     };
 
+    let zero_tx_count = display_payees
+        .iter()
+        .filter(|p| tx_counts.get(p.id.as_str()).copied().unwrap_or(0) == 0)
+        .count();
+
+    if *show_zero_only.read() {
+        display_payees.retain(|payee| {
+            tx_counts.get(payee.id.as_str()).copied().unwrap_or(0) == 0
+        });
+    }
+
     rsx! {
         if let Some(err) = error_msg.read().as_ref() {
             div {
@@ -263,53 +287,129 @@ fn Payees() -> Element {
                 span { class: "stats-hidden-badge", "{hidden_note}" }
             }
             span { class: "stats-divider", "|" }
+            span { "Zero Tx Payees: " strong { "{zero_tx_count}" } }
+            span { class: "stats-divider", "|" }
             span { "Payee Knowledge: " code { "{PAYEES_KNOWLEDGE.read()}" } }
             span { class: "stats-divider", "|" }
-            span { "Transactions Cached: " strong { "{TRANSACTIONS_CACHE.read().len()}" } }
+            span { "Transactions Cached: " strong { "{tx_cache.len()}" } }
+            div {
+                style: "margin-left: auto;",
+                button {
+                    class: if *show_zero_only.read() { "btn-toggle active" } else { "btn-toggle" },
+                    onclick: move |_| {
+                        let current = *show_zero_only.read();
+                        show_zero_only.set(!current);
+                    },
+                    if *show_zero_only.read() {
+                        "✓ Showing Zero Tx Only ({display_payees.len()})"
+                    } else {
+                        "Show Zero Tx Only ({zero_tx_count})"
+                    }
+                }
+            }
         }
 
         if *is_loading.read() && PAYEES_CACHE.read().is_empty() {
             p { "Loading payees from YNAB..." }
+        } else if display_payees.is_empty() {
+            div {
+                class: "empty-state-card",
+                p {
+                    class: "empty-title",
+                    if *show_zero_only.read() {
+                        "No Payees with Zero Transactions"
+                    } else {
+                        "No Payees Found"
+                    }
+                }
+                if *show_zero_only.read() {
+                    p {
+                        class: "empty-description",
+                        "All active payees currently have at least one transaction attributed to them."
+                    }
+                }
+            }
         } else {
             div {
                 class: "table-container",
                 table {
                     thead {
                         tr {
+                            th { style: "width: 44px; text-align: center;", "" }
                             th { "Name" }
+                            th { style: "text-align: right; width: 120px;", "Transactions" }
                             th { "Transfer Account ID" }
                             th { "Deleted" }
                         }
                     }
                     tbody {
                         for payee in display_payees {
-                            tr {
-                                td {
-                                    "data-fieldname": "name",
-                                    div {
-                                        class: "payee-name-container",
-                                        style: "display: flex; flex-direction: column; gap: 2px;",
-                                        div {
-                                            class: "payee-name",
-                                            style: "font-weight: 600;",
-                                            "{payee.name}"
+                            {
+                                let is_struck = struck_payees.read().contains(&payee.id);
+                                let count = tx_counts.get(payee.id.as_str()).copied().unwrap_or(0);
+                                rsx! {
+                                    tr {
+                                        key: "{payee.id}",
+                                        class: if is_struck { "payee-row-struck" } else { "" },
+                                        td {
+                                            style: "width: 44px; text-align: center;",
+                                            input {
+                                                r#type: "checkbox",
+                                                class: "payee-strike-checkbox",
+                                                title: "Strike out / gray out payee",
+                                                checked: is_struck,
+                                                onchange: {
+                                                    let id = payee.id.clone();
+                                                    move |_| {
+                                                        let mut set = struck_payees.write();
+                                                        if set.contains(&id) {
+                                                            set.remove(&id);
+                                                        } else {
+                                                            set.insert(id.clone());
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
-                                        div {
-                                            class: "payee-id-subtext",
-                                            "data-fieldname": "id",
-                                            style: "font-style: italic; font-size: 11px; color: #8b949e; font-family: ui-monospace, SFMono-Regular, monospace; margin-top: 2px;",
-                                            "{payee.id}"
+                                        td {
+                                            "data-fieldname": "name",
+                                            div {
+                                                class: "payee-name-container",
+                                                style: "display: flex; flex-direction: column; gap: 2px;",
+                                                div {
+                                                    class: "payee-name",
+                                                    style: "font-weight: 600;",
+                                                    "{payee.name}"
+                                                }
+                                                div {
+                                                    class: "payee-id-subtext",
+                                                    "data-fieldname": "id",
+                                                    style: "font-style: italic; font-size: 11px; color: #8b949e; font-family: ui-monospace, SFMono-Regular, monospace; margin-top: 2px;",
+                                                    "{payee.id}"
+                                                }
+                                            }
+                                        }
+                                        td {
+                                            "data-fieldname": "tx_count",
+                                            style: "text-align: right; font-family: ui-monospace, SFMono-Regular, monospace; font-weight: 600;",
+                                            span {
+                                                class: if count == 0 { "tx-count-zero" } else { "tx-count-badge" },
+                                                "{count}"
+                                            }
+                                        }
+                                        td {
+                                            "data-fieldname": "transfer_acct_id",
+                                            "{payee.transfer_account_id.as_deref().unwrap_or(\"None\")}"
+                                        }
+                                        td {
+                                            "data-fieldname": "deleted",
+                                            span {
+                                                class: if payee.deleted { "status-badge status-deleted" } else { "status-badge status-active" },
+                                                "{payee.deleted}"
+                                            }
                                         }
                                     }
-                                },
-                                td {"data-fieldname": "transfer_acct_id", "{payee.transfer_account_id.as_deref().unwrap_or(\"None\")}"},
-                                td {
-                                    "data-fieldname": "deleted",
-                                    span {
-                                        class: if payee.deleted { "status-badge status-deleted" } else { "status-badge status-active" },
-                                        "{payee.deleted}"
-                                    }
-                                },
+                                }
                             }
                         }
                     }

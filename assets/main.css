@@ -444,6 +444,75 @@ tr.transfer-pair-second {
     font-weight: 500;
 }
 
+/* Payee Page Features */
+.btn-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    background-color: var(--bg-hover);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease-in-out;
+}
+
+.btn-toggle:hover {
+    color: var(--text-primary);
+    border-color: #58a6ff;
+}
+
+.btn-toggle.active {
+    background-color: rgba(56, 139, 253, 0.15);
+    border-color: #388bfd;
+    color: #58a6ff;
+}
+
+.payee-strike-checkbox {
+    cursor: pointer;
+    width: 16px;
+    height: 16px;
+    accent-color: #388bfd;
+    vertical-align: middle;
+}
+
+tr.payee-row-struck {
+    opacity: 0.45;
+    background-color: rgba(110, 118, 129, 0.08) !important;
+}
+
+tr.payee-row-struck td {
+    color: var(--text-muted) !important;
+    text-decoration: line-through;
+}
+
+tr.payee-row-struck .payee-name,
+tr.payee-row-struck .payee-id-subtext {
+    color: var(--text-muted) !important;
+    text-decoration: line-through;
+}
+
+tr.payee-row-struck .status-badge,
+tr.payee-row-struck .tx-count-badge,
+tr.payee-row-struck .tx-count-zero {
+    opacity: 0.5;
+    text-decoration: line-through;
+}
+
+.tx-count-badge {
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.tx-count-zero {
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 400;
+}
+
 .text-muted {
     color: var(--text-muted);
 }
