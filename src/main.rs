@@ -44,6 +44,8 @@ static TRANSACTIONS_KNOWLEDGE: GlobalSignal<u64> = GlobalSignal::new(|| 0);
 static BUDGET: GlobalSignal<&str> = GlobalSignal::new(|| "default");
 static REVIEW_QUEUE_COUNT: GlobalSignal<usize> = GlobalSignal::new(|| 0);
 static ACTION_QUEUE_COUNT: GlobalSignal<usize> = GlobalSignal::new(|| 0);
+static IS_SYNCING: GlobalSignal<bool> = GlobalSignal::new(|| false);
+static SYNC_ERROR: GlobalSignal<Option<String>> = GlobalSignal::new(|| None);
 
 fn main() {
     dioxus::launch(App);
@@ -222,37 +224,6 @@ fn Payees() -> Element {
         }
     });
 
-    let db_for_refresh = db.clone();
-    let token_for_refresh = token.clone();
-    let refresh_payees = move |_| {
-        let db = db_for_refresh.clone();
-        let token = token_for_refresh.clone();
-        spawn(async move {
-            if let Some(ref t) = token {
-                if t.is_valid() {
-                    is_loading.set(true);
-                    error_msg.set(None);
-                    let budget = *BUDGET.read();
-
-                    match fetch_and_store_payees(&db, &t.to_string(), budget).await {
-                        Ok((payees, k)) => {
-                            *PAYEES_CACHE.write() = payees;
-                            *PAYEES_KNOWLEDGE.write() = k;
-                        }
-                        Err(e) => error_msg.set(Some(e)),
-                    }
-
-                    if let Ok((txs, k, _)) = fetch_and_store_transactions(&db, &t.to_string(), budget).await {
-                        *TRANSACTIONS_CACHE.write() = txs;
-                        *TRANSACTIONS_KNOWLEDGE.write() = k;
-                    }
-
-                    is_loading.set(false);
-                }
-            }
-        });
-    };
-
     let payees_cache = PAYEES_CACHE.read();
     let mut display_payees: Vec<_> = payees_cache
         .iter()
@@ -278,17 +249,11 @@ fn Payees() -> Element {
     };
 
     rsx! {
-        div {
-            class: "payees-header",
-            button {
-                id: "get_payees",
-                class: "btn btn-primary",
-                onclick: refresh_payees,
-                disabled: *is_loading.read(),
-                if *is_loading.read() { "Syncing Payees..." } else { "Sync Payees" }
-            }
-            if let Some(err) = error_msg.read().as_ref() {
-                p { class: "error-banner", "Error: {err}" }
+        if let Some(err) = error_msg.read().as_ref() {
+            div {
+                class: "error-banner",
+                style: "margin-bottom: 14px;",
+                "Error: {err}"
             }
         }
         div {
@@ -391,52 +356,9 @@ fn ActionsPage() -> Element {
 /// Transaction Page
 #[component]
 fn Transactions() -> Element {
-    let db = use_context::<Arc<idb::Database>>();
-    let auth = use_context::<AuthActions>();
-    let token = (auth.token)();
-
-    let mut is_syncing = use_signal(|| false);
-    let mut error_msg = use_signal(|| Option::<String>::None);
-
-    let db_for_sync = db.clone();
-    let token_for_sync = token.clone();
-    let sync_transactions = move |_| {
-        let db = db_for_sync.clone();
-        let token = token_for_sync.clone();
-        spawn(async move {
-            if let Some(ref t) = token {
-                if t.is_valid() {
-                    is_syncing.set(true);
-                    error_msg.set(None);
-                    let budget = *BUDGET.read();
-                    match fetch_and_store_transactions(&db, &t.to_string(), budget).await {
-                        Ok((txs, k, _)) => {
-                            *TRANSACTIONS_CACHE.write() = txs;
-                            *TRANSACTIONS_KNOWLEDGE.write() = k;
-                        }
-                        Err(e) => error_msg.set(Some(e)),
-                    }
-                    is_syncing.set(false);
-                }
-            }
-        });
-    };
-
     let txs = TRANSACTIONS_CACHE.read();
 
     rsx! {
-        div {
-            class: "payees-header",
-            button {
-                class: "btn btn-primary",
-                onclick: sync_transactions,
-                disabled: *is_syncing.read(),
-                if *is_syncing.read() { "Syncing Transactions..." } else { "Sync Transactions" }
-            }
-            if let Some(err) = error_msg.read().as_ref() {
-                p { class: "error-banner", "Error: {err}" }
-            }
-        }
         div {
             class: "stats-bar",
             span { "Total Transactions: " strong { "{txs.len()}" } }
@@ -509,6 +431,45 @@ fn Navbar() -> Element {
     let review_cnt = *REVIEW_QUEUE_COUNT.read();
     let action_cnt = *ACTION_QUEUE_COUNT.read();
 
+    let do_sync = {
+        let db = db.clone();
+        let auth = auth.clone();
+        move |_| {
+            let db = db.clone();
+            let token = (auth.token)();
+            spawn(async move {
+                if let Some(ref t) = token {
+                    if t.is_valid() {
+                        *IS_SYNCING.write() = true;
+                        *SYNC_ERROR.write() = None;
+                        let budget = *BUDGET.read();
+                        let token_str = t.to_string();
+
+                        let payee_res = fetch_and_store_payees(&db, &token_str, budget).await;
+                        let tx_res = fetch_and_store_transactions(&db, &token_str, budget).await;
+
+                        match (payee_res, tx_res) {
+                            (Ok((payees, pk)), Ok((txs, tk, _))) => {
+                                *PAYEES_CACHE.write() = payees;
+                                *PAYEES_KNOWLEDGE.write() = pk;
+                                *TRANSACTIONS_CACHE.write() = txs;
+                                *TRANSACTIONS_KNOWLEDGE.write() = tk;
+                            }
+                            (Err(e), _) => {
+                                *SYNC_ERROR.write() = Some(format!("Payee sync failed: {}", e));
+                            }
+                            (_, Err(e)) => {
+                                *SYNC_ERROR.write() = Some(format!("Transaction sync failed: {}", e));
+                            }
+                        }
+
+                        *IS_SYNCING.write() = false;
+                    }
+                }
+            });
+        }
+    };
+
     let sign_out = {
         let db = db.clone();
         move |_| {
@@ -576,11 +537,25 @@ fn Navbar() -> Element {
                     "Transactions"
                 }
                 button {
+                    id: "global_sync_btn",
+                    class: "btn-sync",
+                    disabled: *IS_SYNCING.read(),
+                    onclick: do_sync,
+                    if *IS_SYNCING.read() { "Syncing..." } else { "Sync" }
+                }
+                button {
                     class: "btn-signout btn-outline-danger",
                     title: "Nuke database and sign out",
                     onclick: sign_out,
                     "Sign Out"
                 }
+            }
+        }
+        if let Some(err) = SYNC_ERROR.read().as_ref() {
+            div {
+                class: "error-banner",
+                style: "margin-bottom: 14px;",
+                span { "Sync error: {err}" }
             }
         }
         div {

@@ -41,17 +41,17 @@ The application is structured into the following components and routes in `src/m
   - If no valid token is found, displays the login view with a "Login with YNAB" button.
   - When authenticated with a valid token, renders `Router::<Route>`.
 - **`Navbar`**: Layout component wrapping child routes.
-  - Provides navigation links between Payees (`/`) and Transactions (`/transactions`).
+  - Provides navigation links between Payees (`/`), Duplicates (`/duplicates`), Review (`/review`), Action Queue (`/queue`), and Transactions (`/transactions`).
+  - Includes a unified "Sync" button at the top of the page that refreshes both payees and transactions from YNAB.
+  - Includes a "Sign Out" button that nukes the token and database and triggers a clean re-authentication.
   - Displays a warning banner advising users to make a budget backup.
   - Mounts child pages via `Outlet::<Route>`.
 - **`Payees` (`/`)**:
   - Loads cached payee records and server knowledge from IndexedDB on initial mount.
   - If IndexedDB is empty, automatically triggers an initial fetch from the YNAB API.
-  - Includes a manual "Sync Payees" button to fetch current payee data from the YNAB API, persist it to IndexedDB via `replace_payees`, and update in-memory cache signals.
-  - Renders a table displaying Payee ID, Name, Transfer Account ID, and Deleted status.
+  - Renders a table displaying Payee Name, Payee ID subtext, Transfer Account ID, and Deleted status.
 - **`Transactions` (`/transactions`)**:
   - Displays cached transactions stored in IndexedDB with date, payee, memo, amount, cleared, and approved status.
-  - Includes a manual "Sync Transactions" button.
 - **`Duplicates` (`/duplicates`)**:
   - Scans cached payees (excluding payees with 0 transactions and those already queued) using fuzzy string similarity clustering (defaulting to strict matching).
   - Allows selecting duplicate payees to combine and queuing them into the Payee Review Queue.

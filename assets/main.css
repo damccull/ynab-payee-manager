@@ -78,6 +78,32 @@ body {
     color: var(--text-primary);
 }
 
+.btn-sync {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 16px;
+    background-color: var(--accent-green);
+    border: 1px solid rgba(240, 246, 252, 0.15);
+    border-radius: 6px;
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-left: 8px;
+    transition: all 0.15s ease-in-out;
+}
+
+.btn-sync:hover:not(:disabled) {
+    background-color: var(--accent-green-hover);
+    border-color: rgba(240, 246, 252, 0.25);
+}
+
+.btn-sync:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
 .btn-signout {
     display: inline-flex;
     align-items: center;
