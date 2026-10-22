@@ -353,7 +353,7 @@ fn ActionsPage() -> Element {
     }
 }
 
-const TX_PAGE_SIZE: usize = 50;
+const MAX_TX_POOL_SIZE: usize = 100;
 
 #[derive(Clone, PartialEq, Default, Debug)]
 struct TransactionSlot {
@@ -367,9 +367,29 @@ struct TransactionSlot {
     approved: bool,
 }
 
-fn update_slot_pool(pool: &mut Signal<Vec<TransactionSlot>>, items: &[Transaction]) {
+fn calculate_dynamic_page_size() -> usize {
+    if let Some(window) = web_sys::window() {
+        if let Ok(height_val) = window.inner_height() {
+            if let Some(height) = height_val.as_f64() {
+                // Header, warning banner, search toolbar, table header, bottom pager, margins
+                let overhead = 310.0;
+                let row_height = 42.0;
+                let available = (height - overhead).max(120.0);
+                let count = (available / row_height).floor() as usize;
+                return count.clamp(8, MAX_TX_POOL_SIZE);
+            }
+        }
+    }
+    20
+}
+
+fn update_slot_pool(
+    pool: &mut Signal<Vec<TransactionSlot>>,
+    items: &[Transaction],
+    max_slots: usize,
+) {
     let mut guard = pool.write();
-    for i in 0..TX_PAGE_SIZE {
+    for i in 0..max_slots {
         let slot = &mut guard[i];
         if i < items.len() {
             let tx = &items[i];
@@ -395,12 +415,6 @@ fn update_slot_pool(pool: &mut Signal<Vec<TransactionSlot>>, items: &[Transactio
     }
 }
 
-fn scroll_to_top() {
-    if let Some(window) = web_sys::window() {
-        window.scroll_to_with_x_and_y(0.0, 0.0);
-    }
-}
-
 #[component]
 fn PagerBar(
     page: usize,
@@ -409,12 +423,11 @@ fn PagerBar(
     is_loading: bool,
     start_item: usize,
     end_item: usize,
-    class_extra: &'static str,
     on_page_change: EventHandler<usize>,
 ) -> Element {
     rsx! {
         div {
-            class: "pagination-bar {class_extra}",
+            class: "pagination-bar bottom-pagination-bar sticky-bottom",
             div {
                 class: "pagination-info",
                 "Showing {start_item}–{end_item} of {count} transactions"
@@ -428,10 +441,7 @@ fn PagerBar(
                     class: "btn-page",
                     disabled: page == 0 || is_loading,
                     title: "First page",
-                    onclick: move |_| {
-                        scroll_to_top();
-                        on_page_change.call(0);
-                    },
+                    onclick: move |_| on_page_change.call(0),
                     "«"
                 }
                 button {
@@ -440,7 +450,6 @@ fn PagerBar(
                     title: "Previous page",
                     onclick: move |_| {
                         if page > 0 {
-                            scroll_to_top();
                             on_page_change.call(page - 1);
                         }
                     },
@@ -456,7 +465,6 @@ fn PagerBar(
                     title: "Next page",
                     onclick: move |_| {
                         if page + 1 < pages {
-                            scroll_to_top();
                             on_page_change.call(page + 1);
                         }
                     },
@@ -468,7 +476,6 @@ fn PagerBar(
                     title: "Last page",
                     onclick: move |_| {
                         if pages > 0 {
-                            scroll_to_top();
                             on_page_change.call(pages - 1);
                         }
                     },
@@ -484,7 +491,8 @@ fn PagerBar(
 fn Transactions() -> Element {
     let db = use_context::<Arc<idb::Database>>();
 
-    let mut row_pool = use_signal(|| vec![TransactionSlot::default(); TX_PAGE_SIZE]);
+    let mut page_size = use_signal(calculate_dynamic_page_size);
+    let mut row_pool = use_signal(|| vec![TransactionSlot::default(); MAX_TX_POOL_SIZE]);
     let mut current_page = use_signal(|| 0usize);
     let mut total_count = use_signal(|| 0usize);
     let mut total_pages = use_signal(|| 1usize);
@@ -495,14 +503,15 @@ fn Transactions() -> Element {
     let db_for_load = db.clone();
     let load_page = move |page: usize, query: String| {
         let db = db_for_load.clone();
+        let cur_ps = *page_size.peek();
         spawn(async move {
             is_loading.set(true);
-            match search_transactions_paged(&db, &query, page, TX_PAGE_SIZE).await {
+            match search_transactions_paged(&db, &query, page, cur_ps).await {
                 Ok(paged) => {
                     current_page.set(paged.current_page);
                     total_count.set(paged.total_count);
                     total_pages.set(paged.total_pages);
-                    update_slot_pool(&mut row_pool, &paged.items);
+                    update_slot_pool(&mut row_pool, &paged.items, MAX_TX_POOL_SIZE);
                     has_loaded.set(true);
                 }
                 Err(e) => {
@@ -513,11 +522,27 @@ fn Transactions() -> Element {
         });
     };
 
-    // Initial load and auto-refresh on transaction knowledge update
+    // Auto-detect viewport resize and dynamically adjust items per page
+    use_effect(move || {
+        if let Some(window) = web_sys::window() {
+            use wasm_bindgen::JsCast;
+            let callback = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+                let new_size = calculate_dynamic_page_size();
+                if *page_size.peek() != new_size {
+                    page_size.set(new_size);
+                }
+            });
+            let _ = window.add_event_listener_with_callback("resize", callback.as_ref().unchecked_ref());
+            callback.forget();
+        }
+    });
+
+    // Initial load and auto-refresh on transaction knowledge or viewport height change
     use_effect({
         let load_page = load_page.clone();
         move || {
             let _ = *TRANSACTIONS_KNOWLEDGE.read();
+            let _ = *page_size.read();
             let q = search_query.peek().clone();
             let p = *current_page.peek();
             load_page(p, q);
@@ -529,9 +554,10 @@ fn Transactions() -> Element {
     let page = *current_page.read();
     let pages = *total_pages.read();
     let query_str = search_query.read().clone();
+    let cur_page_size = *page_size.read();
 
-    let start_item = if count == 0 { 0 } else { page * TX_PAGE_SIZE + 1 };
-    let end_item = (start_item + TX_PAGE_SIZE - 1).min(count);
+    let start_item = if count == 0 { 0 } else { page * cur_page_size + 1 };
+    let end_item = (start_item + cur_page_size - 1).min(count);
 
     rsx! {
         div {
@@ -598,22 +624,6 @@ fn Transactions() -> Element {
                 }
             }
         } else {
-            // Top Pager Bar
-            PagerBar {
-                page,
-                pages,
-                count,
-                is_loading: *is_loading.read(),
-                start_item,
-                end_item,
-                class_extra: "top-pagination-bar",
-                on_page_change: {
-                    let load_page = load_page.clone();
-                    let q = query_str.clone();
-                    move |new_page| load_page(new_page, q.clone())
-                },
-            }
-
             div {
                 class: "table-container",
                 table {
@@ -652,7 +662,7 @@ fn Transactions() -> Element {
                 }
             }
 
-            // Bottom Sticky Pager Bar
+            // Bottom Pager Bar
             PagerBar {
                 page,
                 pages,
@@ -660,7 +670,6 @@ fn Transactions() -> Element {
                 is_loading: *is_loading.read(),
                 start_item,
                 end_item,
-                class_extra: "bottom-pagination-bar sticky-bottom",
                 on_page_change: {
                     let load_page = load_page.clone();
                     let q = query_str.clone();
